@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install selenium webdriver-manager
 
       - name: Run Scraper
         run: python scrape.py
@@ -31,11 +31,16 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Trik Perbaikan: Cek dulu apakah filenya ada sebelum di-upload
+          # Cek apakah file ada
           if [ -f berita-mei-2026.csv ]; then
             git add berita-mei-2026.csv
-            git commit -m "Update hasil scraping $(date)"
-            git push
+            
+            # Commit hanya jika ada perubahan. 
+            # Jika tidak ada perubahan, perintah ini tidak akan membuat Actions jadi merah.
+            git commit -m "Update hasil scraping $(date)" || echo "Tidak ada perubahan pada data."
+            
+            # Push perubahan ke repositori
+            git push origin main || echo "Tidak ada yang perlu di-push."
           else
-            echo "File berita-mei-2026.csv tidak ditemukan karena data kosong atau diblokir. Melewati proses upload."
+            echo "File berita-mei-2026.csv tidak ditemukan. Melewati proses upload."
           fi
