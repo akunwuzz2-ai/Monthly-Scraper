@@ -21,7 +21,7 @@ def scrape_berita_mei():
     results = []
 
     try:
-        driver.get("URL_TARGET_ANDA") # Ganti dengan URL asal
+        driver.get("https://www.atrbpn.go.id/berita") # Ganti dengan URL asal
         
         for page in range(1, 51):
             print(f"\n📄 PAGE {page}")
