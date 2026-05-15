@@ -1,107 +1,93 @@
-import os
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
+import cloudscraper
+import pandas as pd
+from bs4 import BeautifulSoup
 import time
-import csv
+import os
 
-def scrape_berita_mei():
-    # Hapus file lama jika ada agar tidak terjadi konflik data lama
-    if os.path.exists('berita-mei-2026.csv'):
-        os.remove('berita-mei-2026.csv')
-
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new") 
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    })
-
-    target_month = "05"
-    target_year = "2026"
+def scrape_atr_bpn():
+    # Inisialisasi scraper yang bisa bypass bot-protection
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        }
+    )
+    
+    target_month = "/05/2026"
     results = []
 
+    print("📅 START SCRAPING MEI 2026 (via CloudScraper)")
+
     try:
-        print("📅 START SCRAPING MEI 2026")
-        driver.get("https://www.atrbpn.go.id/publikasi/berita")
-        time.sleep(8)
+        # 1. Ambil halaman daftar berita
+        # Gunakan URL publikasi agar lebih spesifik
+        url_main = "https://www.atrbpn.go.id/publikasi/berita"
+        response = scraper.get(url_main, timeout=30)
+        
+        if response.status_code != 200:
+            print(f"❌ Gagal akses. Status: {response.status_code}")
+            return
 
-        for page in range(1, 6):
-            print(f"\n📄 PAGE {page}")
-            time.sleep(5)
-            
-            items = driver.find_elements(By.CSS_SELECTOR, ".col-md-3.col-6, .card")
-            if len(items) == 0: break
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Mencari elemen kartu berita
+        items = soup.select(".col-md-3.col-6") or soup.find_all('div', class_='card')
+        print(f"🔍 Items ditemukan di halaman utama: {len(items)}")
 
-            links_data = []
-            for el in items:
-                try:
-                    a = el.find_element(By.TAG_NAME, "a")
-                    url = a.get_attribute("href")
-                    title = a.text.strip()
-                    date_text = el.text
-                    links_data.append({"title": title, "url": url, "date": date_text})
-                except: continue
-
-            page_has_match = False
-            for item in links_data:
-                if target_month in item['date'] and target_year in item['date']:
-                    page_has_match = True
-                    print(f"➡️ DETAIL: {item['title'][:50]}...")
-                    
-                    try:
-                        driver.execute_script(f"window.open('{item['url']}', '_blank');")
-                        driver.switch_to.window(driver.window_handles[-1])
-                        time.sleep(6)
-
-                        ps = driver.find_elements(By.TAG_NAME, "p")
-                        content = "\n\n".join([p.text.strip() for p in ps if len(p.text.strip()) > 30])
-                        
-                        if len(content) < 100:
-                            content = "Konten tidak ditemukan atau struktur halaman berbeda."
-
-                        results.append({
-                            "judul": item['title'],
-                            "tanggal": item['date'].split('\n')[0] if '\n' in item['date'] else item['date'],
-                            "url": item['url'],
-                            "konten": content.replace('"', '""')
-                        })
-                        print(f"   ✅ BERHASIL ({len(content)} karakter)")
-
-                        driver.close()
-                        driver.switch_to.window(driver.window_handles[0])
-                    except:
-                        if len(driver.window_handles) > 1:
-                            driver.close()
-                            driver.switch_to.window(driver.window_handles[0])
-
-            if not page_has_match and page > 1: break
-            
+        for item in items:
             try:
-                next_btn = driver.find_element(By.PARTIAL_LINK_TEXT, "Next")
-                driver.execute_script("arguments[0].click();", next_btn)
-            except: break
+                link_el = item.find('a')
+                if not link_el: continue
+                
+                url = link_el['href']
+                # Pastikan URL lengkap
+                if not url.startswith('http'):
+                    url = "https://www.atrbpn.go.id" + url
+                    
+                title = link_el.text.strip()
+                date_text = item.get_text()
+
+                # Cek apakah berita bulan Mei 2026
+                if target_month in date_text:
+                    print(f"➡️ Mengambil isi: {title[:50]}...")
+                    
+                    # 2. Ambil isi detail berita
+                    detail_res = scraper.get(url, timeout=20)
+                    detail_soup = BeautifulSoup(detail_res.text, 'html.parser')
+                    
+                    # Cari semua paragraf di dalam artikel
+                    # Biasanya berita ada di dalam tag <article> atau div dengan class tertentu
+                    content_area = detail_soup.find('article') or detail_soup.find('div', class_='entry-content')
+                    
+                    if content_area:
+                        paragraphs = content_area.find_all('p')
+                    else:
+                        paragraphs = detail_soup.find_all('p')
+
+                    content = "\n\n".join([p.get_text().strip() for p in paragraphs if len(p.get_text()) > 25])
+
+                    results.append({
+                        "judul": title,
+                        "tanggal": date_text.strip().split('\n')[0],
+                        "url": url,
+                        "konten": content
+                    })
+                    time.sleep(2) # Jeda sopan agar tidak diblokir
+            except Exception as e:
+                print(f"⚠️ Skip satu item karena error: {e}")
+                continue
 
     except Exception as e:
-        print(f"💥 ERROR: {e}")
-    finally:
-        driver.quit()
+        print(f"💥 Error Utama: {e}")
 
+    # 3. Simpan hasil ke CSV menggunakan Pandas (lebih aman untuk karakter spesial)
     if results:
-        with open('berita-mei-2026.csv', 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=results[0].keys(), quoting=csv.QUOTE_ALL)
-            writer.writeheader()
-            writer.writerows(results)
-        print(f"\n📊 SELESAI: {len(results)} data.")
+        df = pd.DataFrame(results)
+        df.to_csv('berita-mei-2026.csv', index=False, encoding='utf-8', quoting=1)
+        print(f"✅ BERHASIL! {len(results)} berita Mei 2026 tersimpan di CSV.")
+    else:
+        print("📊 SELESAI. Tidak ada berita Mei 2026 yang ditemukan hari ini.")
 
 if __name__ == "__main__":
-    scrape_berita_mei()
+    scrape_atr_bpn()
