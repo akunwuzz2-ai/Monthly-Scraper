@@ -12,9 +12,9 @@
     <nav class="bg-gradient-to-r from-blue-900 to-indigo-900 text-white shadow-xl sticky top-0 z-40">
         <div class="container mx-auto px-4 py-4 flex flex-col md:flex-row justify-between items-center gap-2">
             <div>
-                <h1 class="text-2xl font-bold tracking-wide flex items-center gap-2">
+                <a href="index.html" class="text-2xl font-bold tracking-wide flex items-center gap-2 hover:opacity-90 transition">
                     🏢 Monitoring Berita Kementerian ATR/BPN
-                </h1>
+                </a>
                 <p class="text-xs text-blue-200 mt-0.5">Satuan Kerja: Kanwil BPN Provinsi Riau Kepulauan</p>
             </div>
             <div class="bg-blue-800/50 border border-blue-700 px-3 py-1.5 rounded-full text-xs font-semibold tracking-wider text-blue-100 uppercase">
@@ -23,53 +23,50 @@
         </div>
     </nav>
 
-    <main class="container mx-auto py-10 px-4 flex-grow">
+    <main id="homepage-view" class="container mx-auto py-10 px-4 flex-grow hidden">
         <div id="news-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            <div class="col-span-full text-center py-24 flex flex-col items-center justify-center gap-3 text-slate-500">
-                <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                <p class="text-lg font-medium mt-2 animate-pulse">Menyusun Dokumentasi Visual & Konten...</p>
             </div>
-        </div>
     </main>
 
-    <div id="news-modal" class="fixed inset-0 bg-slate-900/70 backdrop-blur-sm hidden z-50 items-center justify-center p-4">
-        <div class="bg-white rounded-2xl max-w-3xl w-full max-h-[85vh] overflow-hidden shadow-2xl flex flex-col transform scale-95 transition-transform duration-300">
-            
-            <div class="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                <span id="modal-date" class="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md uppercase tracking-wider"></span>
-                <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 text-2xl font-bold w-8 h-8 rounded-full flex items-center justify-center hover:bg-slate-200 transition">
-                    &times;
-                </button>
+    <main id="detail-view" class="container mx-auto py-10 px-4 max-w-4xl flex-grow hidden">
+        <div class="mb-6">
+            <a href="index.html" class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium py-2 px-4 rounded-xl shadow-sm transition">
+                ⬅️ Kembali ke Daftar Berita
+            </a>
+        </div>
+
+        <article class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden p-6 md:p-10 space-y-6">
+            <div class="border-b border-slate-100 pb-4">
+                <span id="detail-date" class="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md uppercase tracking-wider"></span>
+                <h1 id="detail-title" class="text-2xl md:text-4xl font-extrabold text-slate-800 leading-tight mt-3"></h1>
             </div>
 
-            <div class="p-6 md:p-8 overflow-y-auto space-y-6 flex-grow">
-                <h2 id="modal-title" class="text-xl md:text-2xl font-bold text-slate-800 leading-snug"></h2>
-                
-                <div id="modal-image-container" class="w-full rounded-xl overflow-hidden bg-slate-100 border border-slate-200 hidden">
-                    <img id="modal-image" src="" class="w-full h-auto max-h-96 object-contain mx-auto" alt="Foto Berita" onerror="handleModalImageError(this)">
-                    <p id="modal-image-fallback-text" class="text-center text-xs text-amber-600 bg-amber-50 p-3 hidden border-t border-amber-100">
-                        ⚠️ Gambar dilindungi hak akses oleh server pusat. Silakan gunakan link alternatif di bawah untuk membuka gambar.
-                    </p>
-                </div>
-
-                <div id="modal-content" class="text-slate-600 leading-relaxed text-sm md:text-base space-y-4 whitespace-pre-line border-t border-slate-100 pt-4">
-                </div>
+            <div id="detail-image-container" class="w-full rounded-xl overflow-hidden bg-slate-100 border border-slate-200 hidden">
+                <img id="detail-image" src="" class="w-full h-auto max-h-[500px] object-contain mx-auto" alt="Foto Publikasi" onerror="handleDetailImageError(this)">
+                <p id="detail-image-fallback-text" class="text-center text-xs text-amber-600 bg-amber-50 p-3 hidden border-t border-amber-100">
+                    ⚠️ Gambar dilindungi hak akses CORS oleh server pusat. Gunakan tautan "Buka Gambar di Tab Baru" di bawah untuk memuat foto secara manual.
+                </p>
             </div>
 
-            <div class="bg-slate-50 px-6 py-4 border-t border-slate-100 flex flex-col sm:flex-row justify-between items-center gap-3">
+            <div id="detail-content" class="text-slate-600 leading-relaxed text-base md:text-lg space-y-4 whitespace-pre-line border-t border-slate-100 pt-6">
+                </div>
+
+            <div class="bg-slate-50 px-6 py-4 rounded-xl border border-slate-100 flex flex-col sm:flex-row justify-between items-center gap-3 mt-8">
                 <div class="flex gap-4">
-                    <a id="modal-original-url" href="#" target="_blank" class="text-xs md:text-sm text-blue-600 font-semibold hover:underline">
-                        🌐 Sumber Berita Resmi BPN ↗
+                    <a id="detail-original-url" href="#" target="_blank" class="text-xs md:text-sm text-blue-600 font-semibold hover:underline">
+                        🌐 Lihat Sumber Asli di Situs ATR/BPN ↗
                     </a>
-                    <a id="modal-image-url" href="#" target="_blank" class="text-xs md:text-sm text-amber-600 font-semibold hover:underline hidden">
+                    <a id="detail-image-url" href="#" target="_blank" class="text-xs md:text-sm text-amber-600 font-semibold hover:underline hidden">
                         🖼️ Buka Gambar di Tab Baru ↗
                     </a>
                 </div>
-                <button onclick="closeModal()" class="w-full sm:w-auto bg-slate-800 hover:bg-slate-700 text-white px-6 py-2 rounded-xl text-sm font-medium transition">
-                    Tutup
-                </button>
             </div>
-        </div>
+        </article>
+    </main>
+
+    <div id="loading-view" class="flex flex-col items-center justify-center py-40 flex-grow text-slate-500">
+        <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+        <p class="text-lg font-medium mt-4 animate-pulse">Menghubungkan Jalur Berita Dinamis...</p>
     </div>
 
     <footer class="bg-slate-900 text-slate-400 py-6 text-center text-xs mt-auto">
@@ -79,105 +76,118 @@
     <script>
         let articlesData = [];
 
-        // Membaca database CSV mandiri kamu
+        // 1. Tangkap parameter ID dari URL browser (Contoh: index.html?id=2)
+        const urlParams = new URLSearchParams(window.location.search);
+        const articleId = urlParams.get('id');
+
+        // 2. Membaca database CSV mandiri kamu
         Papa.parse("berita-mei-2026.csv", {
             download: true,
             header: true,
             skipEmptyLines: true,
             complete: function(results) {
-                const container = document.getElementById('news-container');
-                container.innerHTML = ''; 
-
                 articlesData = results.data;
+                
+                // Matikan spinner loading setelah data siap
+                document.getElementById('loading-view').classList.add('hidden');
 
-                if (articlesData.length === 0) {
-                    container.innerHTML = `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-400">⚠️ Database CSV kosong.</div>`;
-                    return;
+                // 3. Sistem Routing Otomatis
+                if (articleId !== null && articlesData[articleId]) {
+                    // Jika ada Parameter ID di URL, render Halaman Artikel Baru
+                    renderDetailView(articleId);
+                } else {
+                    // Jika URL bersih, render Daftar Grid Halaman Depan
+                    renderHomepageView();
                 }
-
-                articlesData.forEach((item, index) => {
-                    const judul = item.judul ? item.judul.trim() : '';
-                    const tanggal = item.tanggal ? item.tanggal.trim() : 'Mei 2026';
-                    const urlAsli = item.url ? item.url.trim() : '#';
-                    const gambarUrl = item.gambar ? item.gambar.trim() : '';
-                    const kontenUtuh = item.content ? item.content.trim() : '';
-
-                    if (!judul || judul.toLowerCase() === 'judul') return;
-
-                    // Membuat ringkasan dinamis halaman depan (Maksimal 120 karakter)
-                    let cuplikan = 'Klik tombol di bawah untuk melihat rincian berita selengkapnya.';
-                    if (kontenUtuh.length > 0) {
-                        if (kontenUtuh.length > 120) {
-                            cuplikan = kontenUtuh.substring(0, kontenUtuh.lastIndexOf(' ', 120)) + '...';
-                        } else {
-                            cuplikan = kontenUtuh;
-                        }
-                    }
-
-                    // Penentuan Gambar Utama dengan Fallback jika link gambar rusak/CORS terblokir
-                    const displayGambar = gambarUrl !== '' ? gambarUrl : 'https://via.placeholder.com/600x400?text=Kementerian+ATR/BPN';
-
-                    const card = `
-                        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between">
-                            <div>
-                                <div class="h-48 w-full bg-slate-100 relative overflow-hidden border-b border-slate-100">
-                                    <img src="${displayGambar}" 
-                                         class="w-full h-full object-cover" 
-                                         alt="Thumbnail" 
-                                         onerror="this.onerror=null; this.src='https://via.placeholder.com/600x400?text=ATR/BPN+Kepri';">
-                                    <span class="absolute bottom-3 left-3 bg-blue-600 text-white font-bold text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-md shadow-sm">
-                                        📅 ${tanggal}
-                                    </span>
-                                </div>
-
-                                <div class="p-6">
-                                    <h2 class="text-base font-bold text-slate-800 leading-snug mb-2 text-ellipsis overflow-hidden" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;" title="${judul}">
-                                        ${judul}
-                                    </h2>
-                                    <p class="text-slate-500 text-xs md:text-sm leading-relaxed mb-3">
-                                        ${cuplikan}
-                                    </p>
-                                    
-                                    <a href="${urlAsli}" target="_blank" class="inline-flex items-center text-xs text-blue-600 font-medium hover:underline gap-1">
-                                        🔗 Buka Sumber Asli Portal ↗
-                                    </a>
-                                </div>
-                            </div>
-
-                            <div class="px-6 pb-6 pt-2">
-                                <button onclick="openModal(${index})" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl text-xs md:text-sm shadow-sm transition text-center block">
-                                    Baca Selengkapnya
-                                </button>
-                            </div>
-                        </div>
-                    `;
-                    container.innerHTML += card;
-                });
             }
         });
 
-        // Membuka Jendela Modal Detail Berita
-        function openModal(index) {
+        // FUNGSI UNTUK MERENDER HALAMAN DEPAN (GRID LIST)
+        function renderHomepageView() {
+            const homepageView = document.getElementById('homepage-view');
+            const container = document.getElementById('news-container');
+            container.innerHTML = ''; 
+
+            articlesData.forEach((item, index) => {
+                const judul = item.judul ? item.judul.trim() : '';
+                const tanggal = item.tanggal ? item.tanggal.trim() : 'Mei 2026';
+                const urlAsli = item.url ? item.url.trim() : '#';
+                const gambarUrl = item.gambar ? item.gambar.trim() : '';
+                const kontenUtuh = item.content ? item.content.trim() : '';
+
+                if (!judul || judul.toLowerCase() === 'judul') return;
+
+                // Membuat cuplikan otomatis kalimat depan
+                let cuplikan = 'Klik tombol di bawah untuk melihat rincian berita selengkapnya.';
+                if (kontenUtuh.length > 0) {
+                    if (kontenUtuh.length > 120) {
+                        cuplikan = kontenUtuh.substring(0, kontenUtuh.lastIndexOf(' ', 120)) + '...';
+                    } else {
+                        cuplikan = kontenUtuh;
+                    }
+                }
+
+                const displayGambar = gambarUrl !== '' ? gambarUrl : 'https://via.placeholder.com/600x400?text=Kementerian+ATR/BPN';
+
+                // Tautan 'Baca Selengkapnya' sekarang merujuk ke link baru: ?id=INDEX
+                const card = `
+                    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between">
+                        <div>
+                            <div class="h-48 w-full bg-slate-100 relative overflow-hidden border-b border-slate-100">
+                                <img src="${displayGambar}" class="w-full h-full object-cover" alt="Thumbnail" onerror="this.onerror=null; this.src='https://via.placeholder.com/600x400?text=ATR/BPN+Kepri';">
+                                <span class="absolute bottom-3 left-3 bg-blue-600 text-white font-bold text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-md shadow-sm">
+                                    📅 ${tanggal}
+                                </span>
+                            </div>
+
+                            <div class="p-6">
+                                <h2 class="text-base font-bold text-slate-800 leading-snug mb-2 text-ellipsis overflow-hidden" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;" title="${judul}">
+                                    <a href="index.html?id=${index}" class="hover:text-blue-700 transition">${judul}</a>
+                                </h2>
+                                <p class="text-slate-500 text-xs md:text-sm leading-relaxed mb-3">
+                                    ${cuplikan}
+                                </p>
+                                <a href="${urlAsli}" target="_blank" class="inline-flex items-center text-xs text-blue-400 font-medium hover:underline gap-1">
+                                    🔗 Buka Publikasi Asli Pusat ↗
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="px-6 pb-6 pt-2">
+                            <a href="index.html?id=${index}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl text-xs md:text-sm shadow-sm transition text-center block">
+                                Baca Selengkapnya
+                            </a>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML += card;
+            });
+
+            homepageView.classList.remove('hidden');
+        }
+
+        // FUNGSI UNTUK MERENDER HALAMAN BARU (DETAIL VIEW)
+        function renderDetailView(index) {
+            const detailView = document.getElementById('detail-view');
             const item = articlesData[index];
-            if(!item) return;
 
-            document.getElementById('modal-title').innerText = item.judul || 'Rincian Berita';
-            document.getElementById('modal-date').innerText = `📅 Tanggal Rilis: ${item.tanggal || 'Mei 2026'}`;
-            document.getElementById('modal-content').innerText = item.content || 'Konten berita utuh tidak tersedia.';
-            document.getElementById('modal-original-url').href = item.url || '#';
+            document.getElementById('detail-title').innerText = item.judul || 'Rincian Berita';
+            document.getElementById('detail-date').innerText = `📅 Diterbitkan pada: ${item.tanggal || 'Mei 2026'}`;
+            document.getElementById('detail-content').innerText = item.content || 'Konten teks utuh tidak tersedia.';
+            document.getElementById('detail-original-url').href = item.url || '#';
 
-            const imgContainer = document.getElementById('modal-image-container');
-            const modalImg = document.getElementById('modal-image');
-            const fallbackText = document.getElementById('modal-image-fallback-text');
-            const imgBtn = document.getElementById('modal-image-url');
+            const imgContainer = document.getElementById('detail-image-container');
+            const detailImg = document.getElementById('detail-image');
+            const fallbackText = document.getElementById('detail-image-fallback-text');
+            const imgBtn = document.getElementById('detail-image-url');
 
-            // Reset komponen gambar modal
+            // Reset komponen visual gambar detail
             fallbackText.classList.add('hidden');
             imgBtn.classList.add('hidden');
-            modalImg.style.display = 'block';
+            detailImg.style.display = 'block';
 
             if (item.gambar && item.gambar.trim() !== '') {
-                modalImg.src = item.gambar.trim();
+                detailImg.src = item.gambar.trim();
                 imgContainer.classList.remove('hidden');
                 imgBtn.href = item.gambar.trim();
                 imgBtn.classList.remove('hidden');
@@ -185,27 +195,15 @@
                 imgContainer.classList.add('hidden');
             }
 
-            const modal = document.getElementById('news-modal');
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            document.body.style.overflow = 'hidden';
+            // Ubah judul Tab Browser sesuai berita yang sedang dibaca
+            document.title = item.judul ? `${item.judul} - Monitoring BPN` : document.title;
+
+            detailView.classList.remove('hidden');
         }
 
-        function closeModal() {
-            const modal = document.getElementById('news-modal');
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-            document.body.style.overflow = '';
-        }
-
-        function handleModalImageError(img) {
-            document.getElementById('modal-image-fallback-text').classList.remove('hidden');
+        function handleDetailImageError(img) {
+            document.getElementById('detail-image-fallback-text').classList.remove('hidden');
             img.style.display = 'none'; 
-        }
-
-        window.onclick = function(event) {
-            const modal = document.getElementById('news-modal');
-            if (event.target === modal) { closeModal(); }
         }
     </script>
 </body>
