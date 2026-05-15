@@ -23,6 +23,10 @@ def scrape_berita_mei():
         chrome_options.add_experimental_option('useAutomationExtension', False)
     
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    # --- TAMBAHKAN BARIS INI ---
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        })
     
     target_month = "05"
     target_year = "2026"
