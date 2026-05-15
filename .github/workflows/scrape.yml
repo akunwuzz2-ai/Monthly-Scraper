@@ -2,9 +2,8 @@ name: Run Monthly Scraper
 
 on:
   schedule:
-    # Berjalan otomatis setiap tanggal 1 jam 00:00 UTC
     - cron: '0 0 1 * *' 
-  workflow_dispatch: # Memungkinkan kamu menjalankan manual dari tombol di GitHub
+  workflow_dispatch: 
 
 jobs:
   build:
@@ -31,6 +30,12 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add berita-mei-2026.csv
-          git commit -m "Update hasil scraping $(date)"
-          git push
+          
+          # Trik Perbaikan: Cek dulu apakah filenya ada sebelum di-upload
+          if [ -f berita-mei-2026.csv ]; then
+            git add berita-mei-2026.csv
+            git commit -m "Update hasil scraping $(date)"
+            git push
+          else
+            echo "File berita-mei-2026.csv tidak ditemukan karena data kosong atau diblokir. Melewati proses upload."
+          fi
