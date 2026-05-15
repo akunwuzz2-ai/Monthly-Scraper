@@ -17,34 +17,88 @@
 
     <div class="container mx-auto py-8 px-4">
         <div id="news-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div class="col-span-full text-center py-20 text-gray-500">Memuat data berita...</div>
+            <div class="col-span-full text-center py-20 text-gray-500">
+                <p class="text-lg animate-pulse">Memuat dan menyinkronkan data berita...</p>
+            </div>
         </div>
     </div>
 
     <script>
-        // Membaca file CSV lokal
+        // Membaca file CSV lokal tanpa bergantung pada nama Header (menggunakan nomor kolom)
         Papa.parse("berita-mei-2026.csv", {
             download: true,
-            header: true,
+            header: false, // Diubah ke false agar kita bisa baca lewat indeks [0], [1], dst.
+            skipEmptyLines: true,
             complete: function(results) {
                 const container = document.getElementById('news-container');
-                container.innerHTML = ''; // Kosongkan loader
+                container.innerHTML = ''; // Bersihkan tulisan memuat data
 
-                results.data.forEach(item => {
-                    if(item.judul) {
-                        const card = `
-                            <div class="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition">
-                                <div class="p-5">
-                                    <span class="text-xs font-semibold text-blue-600 uppercase">${item.tanggal}</span>
-                                    <h2 class="text-xl font-bold my-2 text-gray-800">${item.judul}</h2>
-                                    <p class="text-gray-600 text-sm mb-4 line-clamp-3">${item.konten.substring(0, 150)}...</p>
-                                    <a href="${item.url}" target="_blank" class="inline-block bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">Baca Selengkapnya</a>
+                const rows = results.data;
+                
+                // Jika data kosong atau hanya berisi header
+                if (rows.length <= 1) {
+                    container.innerHTML = `
+                        <div class="col-span-full text-center py-20 text-gray-500 bg-white rounded-lg shadow p-6">
+                            ⚠️ Belum ada data berita Mei 2026 yang tersimpan di dalam CSV.
+                        </div>`;
+                    return;
+                }
+
+                let beritaCount = 0;
+
+                // Loop dimulai dari indeks 1 (melewati baris header)
+                for (let i = 1; i < rows.length; i++) {
+                    const row = rows[i];
+                    
+                    // Pemetaan berdasarkan posisi kolom di file CSV kamu:
+                    // Kolom 0 = Judul, Kolom 1 = Tanggal, Kolom 2 = URL, Kolom 3 = Konten
+                    const judul = row[0] ? row[0].trim() : '';
+                    const tanggal = row[1] ? row[1].trim() : 'Mei 2026';
+                    const url = row[2] ? row[2].trim() : '#';
+                    const kontenRaw = row[3] ? row[3].trim() : '';
+
+                    // Lewati jika judul kosong
+                    if (!judul || judul.toLowerCase() === 'judul') continue;
+
+                    // Fallback jika konten kosong agar tampilan kartu tidak jelek
+                    const konten = kontenRaw && kontenRaw.length > 10 
+                        ? kontenRaw.substring(0, 160) + '...' 
+                        : 'Klik tombol di bawah untuk membaca detail berita langsung pada situs resmi.';
+
+                    beritaCount++;
+
+                    const card = `
+                        <div class="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-all duration-300 flex flex-col justify-between">
+                            <div class="p-5">
+                                <div class="flex items-center justify-between mb-2">
+                                    <span class="text-xs font-semibold text-blue-600 bg-blue-50 px-2 py-1 rounded">${tanggal}</span>
                                 </div>
+                                <h2 class="text-lg font-bold text-gray-800 mb-2 line-clamp-2" title="${judul}">${judul}</h2>
+                                <p class="text-gray-600 text-sm mb-4 leading-relaxed">${konten}</p>
                             </div>
-                        `;
-                        container.innerHTML += card;
-                    }
-                });
+                            <div class="px-5 pb-5">
+                                <a href="${url}" target="_blank" class="w-full text-center block bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700 transition">
+                                    Baca Selengkapnya
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                    container.innerHTML += card;
+                }
+
+                // Jika setelah difilter tidak ada berita valid
+                if (beritaCount === 0) {
+                    container.innerHTML = `
+                        <div class="col-span-full text-center py-20 text-gray-500 bg-white rounded-lg shadow p-6">
+                            ⚠️ Tidak ada berita valid yang dapat ditampilkan.
+                        </div>`;
+                }
+            },
+            error: function(err) {
+                document.getElementById('news-container').innerHTML = `
+                    <div class="col-span-full text-center py-20 text-red-500 bg-white rounded-lg shadow p-6">
+                        💥 Gagal memproses file CSV: ${err}
+                    </div>`;
             }
         });
     </script>
