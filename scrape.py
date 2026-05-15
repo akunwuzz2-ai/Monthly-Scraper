@@ -8,23 +8,20 @@ import time
 import csv
 
 def scrape_berita_mei():
+    # Hapus file lama jika ada agar tidak terjadi konflik data lama
+    if os.path.exists('berita-mei-2026.csv'):
+        os.remove('berita-mei-2026.csv')
+
     chrome_options = Options()
-    chrome_options.add_argument("--headless=new") # Menggunakan engine headless baru yang lebih sulit dideteksi
+    chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
-    
-    # User-Agent manusia asli (Update ke versi terbaru)
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-    
-    # Menghapus jejak otomasi secara total
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
 
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-    
-    # Sembunyikan navigator.webdriver
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     })
@@ -35,29 +32,15 @@ def scrape_berita_mei():
 
     try:
         print("📅 START SCRAPING MEI 2026")
-        
-        # MENCOBA URL ALTERNATIF (Tanpa HTTPS kadang lebih lancar jika firewall bermasalah di SSL, 
-        # atau gunakan publikasi/berita)
-        url_target = "https://www.atrbpn.go.id/publikasi/berita"
-        print(f"🔗 Menghubungkan ke: {url_target}")
-        
-        driver.get(url_target)
-        time.sleep(10) # Beri waktu ekstra panjang untuk koneksi awal
+        driver.get("https://www.atrbpn.go.id/publikasi/berita")
+        time.sleep(8)
 
         for page in range(1, 6):
             print(f"\n📄 PAGE {page}")
-            # Tunggu elemen muncul dengan durasi maksimal 15 detik
             time.sleep(5)
             
             items = driver.find_elements(By.CSS_SELECTOR, ".col-md-3.col-6, .card")
-            print(f"ITEMS FOUND: {len(items)}")
-
-            if len(items) == 0:
-                print("⚠️ Koneksi berhasil tapi item kosong. Mencoba Refresh...")
-                driver.refresh()
-                time.sleep(8)
-                items = driver.find_elements(By.CSS_SELECTOR, ".col-md-3.col-6, .card")
-                if len(items) == 0: break
+            if len(items) == 0: break
 
             links_data = []
             for el in items:
@@ -65,7 +48,7 @@ def scrape_berita_mei():
                     a = el.find_element(By.TAG_NAME, "a")
                     url = a.get_attribute("href")
                     title = a.text.strip()
-                    date_text = el.text # Ambil semua teks di box berita untuk deteksi tanggal
+                    date_text = el.text
                     links_data.append({"title": title, "url": url, "date": date_text})
                 except: continue
 
@@ -80,12 +63,11 @@ def scrape_berita_mei():
                         driver.switch_to.window(driver.window_handles[-1])
                         time.sleep(6)
 
-                        # Ambil teks paragraf
                         ps = driver.find_elements(By.TAG_NAME, "p")
                         content = "\n\n".join([p.text.strip() for p in ps if len(p.text.strip()) > 30])
                         
                         if len(content) < 100:
-                            content = "Gagal mengambil detail teks secara otomatis."
+                            content = "Konten tidak ditemukan atau struktur halaman berbeda."
 
                         results.append({
                             "judul": item['title'],
@@ -93,23 +75,20 @@ def scrape_berita_mei():
                             "url": item['url'],
                             "konten": content.replace('"', '""')
                         })
-                        print(f"   ✅ OK ({len(content)} chars)")
+                        print(f"   ✅ BERHASIL ({len(content)} karakter)")
 
                         driver.close()
                         driver.switch_to.window(driver.window_handles[0])
                     except:
-                        print("   ❌ Skip detail")
                         if len(driver.window_handles) > 1:
                             driver.close()
                             driver.switch_to.window(driver.window_handles[0])
 
             if not page_has_match and page > 1: break
             
-            # Navigasi Next
             try:
                 next_btn = driver.find_element(By.PARTIAL_LINK_TEXT, "Next")
                 driver.execute_script("arguments[0].click();", next_btn)
-                time.sleep(5)
             except: break
 
     except Exception as e:
@@ -123,3 +102,6 @@ def scrape_berita_mei():
             writer.writeheader()
             writer.writerows(results)
         print(f"\n📊 SELESAI: {len(results)} data.")
+
+if __name__ == "__main__":
+    scrape_berita_mei()
