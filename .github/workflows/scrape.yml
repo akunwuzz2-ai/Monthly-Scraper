@@ -1,40 +1,31 @@
-name: Run Monthly Scraper
+name: Deploy Web Berita
 
 on:
-  schedule:
-    - cron: '0 0 1 * *' 
-  workflow_dispatch: 
+  push:
+    paths:
+      - 'berita-mei-2026.csv'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
-  build:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Setup Pages
+        uses: actions/configure-pages@v3
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v2
         with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install cloudscraper pandas beautifulsoup4
-
-      - name: Run Scraper
-        run: python scrape.py
-
-      - name: Commit and Push CSV result
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          if [ -f berita-mei-2026.csv ]; then
-            git add berita-mei-2026.csv
-            git commit -m "Update hasil scraping $(date)" || echo "Tidak ada perubahan data."
-            git push origin main || echo "Tidak ada yang perlu di-push."
-          else
-            echo "File tidak ditemukan. Melewati proses upload."
-          fi
+          path: '.'
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2
