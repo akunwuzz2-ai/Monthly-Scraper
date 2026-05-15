@@ -26,13 +26,16 @@
     <main id="homepage-view" class="container mx-auto py-10 px-4 flex-grow hidden">
         <div id="news-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             </div>
+
+        <div class="flex justify-center items-center gap-2 mt-12 border-t border-slate-200 pt-8" id="pagination-container">
+            </div>
     </main>
 
     <main id="detail-view" class="container mx-auto py-10 px-4 max-w-4xl flex-grow hidden">
         <div class="mb-6">
-            <a href="index.html" class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium py-2 px-4 rounded-xl shadow-sm transition">
+            <button onclick="goBackToHome()" class="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium py-2 px-4 rounded-xl shadow-sm transition">
                 ⬅️ Kembali ke Daftar Berita
-            </a>
+            </button>
         </div>
 
         <article class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden p-6 md:p-10 space-y-6">
@@ -44,12 +47,12 @@
             <div id="detail-image-container" class="w-full rounded-xl overflow-hidden bg-slate-100 border border-slate-200 hidden">
                 <img id="detail-image" src="" class="w-full h-auto max-h-[500px] object-contain mx-auto" alt="Foto Publikasi" onerror="handleDetailImageError(this)">
                 <p id="detail-image-fallback-text" class="text-center text-xs text-amber-600 bg-amber-50 p-3 hidden border-t border-amber-100">
-                    ⚠️ Gambar dilindungi hak akses CORS oleh server pusat. Gunakan tautan "Buka Gambar di Tab Baru" di bawah untuk memuat foto secara manual.
+                    ⚠️ Gambar dilindungi hak akses oleh server pusat. Silakan buka tautan alternatif di bawah untuk memuat foto secara manual.
                 </p>
             </div>
 
             <div id="detail-content" class="text-slate-600 leading-relaxed text-base md:text-lg space-y-4 whitespace-pre-line border-t border-slate-100 pt-6">
-                </div>
+            </div>
 
             <div class="bg-slate-50 px-6 py-4 rounded-xl border border-slate-100 flex flex-col sm:flex-row justify-between items-center gap-3 mt-8">
                 <div class="flex gap-4">
@@ -75,49 +78,73 @@
 
     <script>
         let articlesData = [];
+        
+        // KONFIGURASI PAGINASI
+        const postsPerPage = 6;
+        let currentPage = 1;
 
-        // 1. Tangkap parameter ID dari URL browser (Contoh: index.html?id=2)
+        // Tangkap parameter URL browser (?id=... untuk detail, ?page=... untuk nomor halaman)
         const urlParams = new URLSearchParams(window.location.search);
         const articleId = urlParams.get('id');
+        const pageParam = urlParams.get('page');
 
-        // 2. Membaca database CSV mandiri kamu
+        if (pageParam) {
+            currentPage = parseInt(pageParam) || 1;
+        }
+
+        // Membaca berkas database CSV kamu (ganti nama jika file di repositori kamu berbeda)
         Papa.parse("berita-mei-2026.csv", {
             download: true,
             header: true,
             skipEmptyLines: true,
             complete: function(results) {
-                articlesData = results.data;
+                // Saring baris kosong yang tidak memiliki judul valid sebelum diolah
+                articlesData = results.data.filter(item => item.judul && item.judul.trim().toLowerCase() !== 'judul');
                 
-                // Matikan spinner loading setelah data siap
                 document.getElementById('loading-view').classList.add('hidden');
 
-                // 3. Sistem Routing Otomatis
+                // Sistem Routing Otomatis
                 if (articleId !== null && articlesData[articleId]) {
-                    // Jika ada Parameter ID di URL, render Halaman Artikel Baru
                     renderDetailView(articleId);
                 } else {
-                    // Jika URL bersih, render Daftar Grid Halaman Depan
                     renderHomepageView();
                 }
             }
         });
 
-        // FUNGSI UNTUK MERENDER HALAMAN DEPAN (GRID LIST)
+        // FUNGSI UTAMA HALAMAN DEPAN (GRID + NOMOR NAVIGASI)
         function renderHomepageView() {
             const homepageView = document.getElementById('homepage-view');
             const container = document.getElementById('news-container');
             container.innerHTML = ''; 
 
-            articlesData.forEach((item, index) => {
-                const judul = item.judul ? item.judul.trim() : '';
+            if (articlesData.length === 0) {
+                container.innerHTML = `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-400">⚠️ Database CSV kosong.</div>`;
+                return;
+            }
+
+            // Hitung batasan data untuk halaman saat ini
+            const totalPages = Math.ceil(articlesData.length / postsPerPage);
+            
+            // Jaga-jaga jika parameter halaman melampaui batas maks
+            if (currentPage > totalPages) currentPage = totalPages;
+            if (currentPage < 1) currentPage = 1;
+
+            const startIndex = (currentPage - 1) * postsPerPage;
+            const endIndex = startIndex + postsPerPage;
+            const paginatedItems = articlesData.slice(startIndex, endIndex);
+
+            // Render 6 Kartu Berita terpilih
+            paginatedItems.forEach((item) => {
+                // Cari index asli dari array utama untuk pencocokan detail ID link
+                const originalIndex = articlesData.findIndex(p => p.judul === item.judul);
+
+                const judul = item.judul.trim();
                 const tanggal = item.tanggal ? item.tanggal.trim() : 'Mei 2026';
                 const urlAsli = item.url ? item.url.trim() : '#';
                 const gambarUrl = item.gambar ? item.gambar.trim() : '';
                 const kontenUtuh = item.content ? item.content.trim() : '';
 
-                if (!judul || judul.toLowerCase() === 'judul') return;
-
-                // Membuat cuplikan otomatis kalimat depan
                 let cuplikan = 'Klik tombol di bawah untuk melihat rincian berita selengkapnya.';
                 if (kontenUtuh.length > 0) {
                     if (kontenUtuh.length > 120) {
@@ -129,7 +156,6 @@
 
                 const displayGambar = gambarUrl !== '' ? gambarUrl : 'https://via.placeholder.com/600x400?text=Kementerian+ATR/BPN';
 
-                // Tautan 'Baca Selengkapnya' sekarang merujuk ke link baru: ?id=INDEX
                 const card = `
                     <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between">
                         <div>
@@ -142,7 +168,7 @@
 
                             <div class="p-6">
                                 <h2 class="text-base font-bold text-slate-800 leading-snug mb-2 text-ellipsis overflow-hidden" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;" title="${judul}">
-                                    <a href="index.html?id=${index}" class="hover:text-blue-700 transition">${judul}</a>
+                                    <a href="index.html?id=${originalIndex}&page=${currentPage}" class="hover:text-blue-700 transition">${judul}</a>
                                 </h2>
                                 <p class="text-slate-500 text-xs md:text-sm leading-relaxed mb-3">
                                     ${cuplikan}
@@ -154,7 +180,7 @@
                         </div>
 
                         <div class="px-6 pb-6 pt-2">
-                            <a href="index.html?id=${index}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl text-xs md:text-sm shadow-sm transition text-center block">
+                            <a href="index.html?id=${originalIndex}&page=${currentPage}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl text-xs md:text-sm shadow-sm transition text-center block">
                                 Baca Selengkapnya
                             </a>
                         </div>
@@ -163,10 +189,46 @@
                 container.innerHTML += card;
             });
 
+            // Render Tombol Angka Navigasi Halaman
+            renderPaginationControls(totalPages);
             homepageView.classList.remove('hidden');
         }
 
-        // FUNGSI UNTUK MERENDER HALAMAN BARU (DETAIL VIEW)
+        // LOGIKA STRUKTUR TOMBOL ANGKA PAGINASI
+        function renderPaginationControls(totalPages) {
+            const paginationContainer = document.getElementById('pagination-container');
+            paginationContainer.innerHTML = '';
+
+            if (totalPages <= 1) return; // Menyembunyikan komponen jika data hanya muat 1 halaman
+
+            // Tombol Halaman Sebelumnya (Sebelumnya)
+            if (currentPage > 1) {
+                paginationContainer.innerHTML += `
+                    <a href="index.html?page=${currentPage - 1}" class="px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-semibold rounded-xl hover:bg-slate-100 transition shadow-xs">
+                        ⬅️
+                    </a>`;
+            }
+
+            // Loop Angka Halaman Berurutan
+            for (let i = 1; i <= totalPages; i++) {
+                const isActive = i === currentPage;
+                const buttonClass = isActive 
+                    ? "px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl shadow-sm" 
+                    : "px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-medium rounded-xl hover:bg-slate-100 transition";
+                
+                paginationContainer.innerHTML += `<a href="index.html?page=${i}" class="${buttonClass}">${i}</a>`;
+            }
+
+            // Tombol Halaman Berikutnya (Selanjutnya)
+            if (currentPage < totalPages) {
+                paginationContainer.innerHTML += `
+                    <a href="index.html?page=${currentPage + 1}" class="px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-semibold rounded-xl hover:bg-slate-100 transition shadow-xs">
+                        ➡️
+                    </a>`;
+            }
+        }
+
+        // FUNGSI MEMBUKA HALAMAN ARTIKEL UTUH
         function renderDetailView(index) {
             const detailView = document.getElementById('detail-view');
             const item = articlesData[index];
@@ -181,7 +243,6 @@
             const fallbackText = document.getElementById('detail-image-fallback-text');
             const imgBtn = document.getElementById('detail-image-url');
 
-            // Reset komponen visual gambar detail
             fallbackText.classList.add('hidden');
             imgBtn.classList.add('hidden');
             detailImg.style.display = 'block';
@@ -195,15 +256,18 @@
                 imgContainer.classList.add('hidden');
             }
 
-            // Ubah judul Tab Browser sesuai berita yang sedang dibaca
             document.title = item.judul ? `${item.judul} - Monitoring BPN` : document.title;
-
             detailView.classList.remove('hidden');
         }
 
         function handleDetailImageError(img) {
             document.getElementById('detail-image-fallback-text').classList.remove('hidden');
             img.style.display = 'none'; 
+        }
+
+        // Fungsi khusus tombol kembali agar mengingat posisi halaman nomor terakhir pengguna
+        function goBackToHome() {
+            window.location.href = `index.html?page=${currentPage}`;
         }
     </script>
 </body>
