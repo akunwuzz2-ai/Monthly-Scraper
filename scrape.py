@@ -1,99 +1,109 @@
 import cloudscraper
 import pandas as pd
-import json
 import time
 import re
+import os
 
-def scrape_atr_bpn_api():
-    # Inisialisasi scraper
-    scraper = cloudscraper.create_scraper()
-    
-    # Tambahkan Headers agar terlihat seperti akses dari browser asli di website mereka
+def scrape_atr_bpn_final():
+    # Menghapus file lama agar fresh
+    if os.path.exists('berita-mei-2026.csv'):
+        os.remove('berita-mei-2026.csv')
+
+    # Menggunakan cloudscraper dengan request khusus untuk bypass 403
+    scraper = cloudscraper.create_scraper(
+        delay=10, 
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'mobile': False
+        }
+    )
+
+    # Headers yang sangat spesifik meniru browser Chrome Windows
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
         'Referer': 'https://www.atrbpn.go.id/berita',
-        'Origin': 'https://www.atrbpn.go.id',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-        'Connection': 'keep-alive'
+        'X-Requested-With': 'XMLHttpRequest',
+        'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
     }
-    
+
     target_month = "05"
     target_year = "2026"
     results = []
 
-    print(f"📅 START SCRAPING MEI 2026 (Refined API Request)")
-
-    # Gunakan endpoint yang sedikit berbeda atau tambahkan parameter pencarian
-    api_list_url = "https://www.atrbpn.go.id/items/berita?sort=-tanggal_rilis&limit=25&fields=id,judul,tanggal_rilis,slug"
+    print(f"📅 MENGHUBUNGI SERVER ATR/BPN...")
 
     try:
-        # Kirim permintaan dengan headers lengkap
-        response = scraper.get(api_list_url, headers=headers, timeout=30)
+        # Langkah 1: Pemanasan (Warm-up) untuk mendapatkan cookies
+        # Kita buka halaman depan dulu
+        print("💡 Melakukan handshake dengan server...")
+        scraper.get("https://www.atrbpn.go.id/", headers=headers, timeout=20)
+        time.sleep(5)
+
+        # Langkah 2: Tembak API List
+        # Kita gunakan endpoint publikasi yang mungkin lebih longgar proteksinya
+        api_url = "https://www.atrbpn.go.id/items/berita?sort=-tanggal_rilis&limit=30&fields=id,judul,tanggal_rilis,slug,konten"
         
-        if response.status_code == 403:
-            print("❌ Masih kena 403. Server memblokir akses otomatis.")
-            print("💡 Mencoba akses melalui URL utama terlebih dahulu untuk mendapatkan session...")
-            scraper.get("https://www.atrbpn.go.id/berita", headers=headers)
-            time.sleep(5)
-            response = scraper.get(api_list_url, headers=headers, timeout=30)
-
+        response = scraper.get(api_url, headers=headers, timeout=30)
+        
         if response.status_code != 200:
-            print(f"❌ Gagal akses API. Status: {response.status_code}")
-            return
+            print(f"❌ Gagal Total. Server tetap memberikan status: {response.status_code}")
+            # Jika 403 lagi, kita coba metode darurat: ambil dari HTML mentah tanpa API
+            return scrape_fallback_html(scraper, headers, target_month, target_year)
 
-        data_berita = response.json().get('data', [])
-        print(f"🔍 Ditemukan {len(data_berita)} berita terbaru.")
+        data = response.json().get('data', [])
+        print(f"🔍 Server merespons. Memeriksa {len(data)} data berita...")
 
-        for berita in data_berita:
-            tgl_rilis = berita.get('tanggal_rilis', '')
-            if not tgl_rilis: continue
-            
-            tahun_api = tgl_rilis.split('-')[0]
-            bulan_api = tgl_rilis.split('-')[1]
-
-            if bulan_api == target_month and tahun_api == target_year:
-                judul = berita.get('judul')
-                slug = berita.get('slug')
-                berita_id = berita.get('id')
-                url_web = f"https://www.atrbpn.go.id/berita/detail/{slug}"
+        for item in data:
+            tgl = item.get('tanggal_rilis', '')
+            if tgl and tgl.startswith(f"{target_year}-{target_month}"):
+                judul = item.get('judul', 'Tanpa Judul')
+                print(f"✅ Menemukan: {judul[:50]}...")
                 
-                print(f"➡️ Ambil detail: {judul[:50]}...")
+                # Bersihkan HTML dari konten
+                raw_konten = item.get('konten', '')
+                clean_konten = re.sub(r'<[^>]+>', '', raw_konten)
+                clean_konten = re.sub(r'\s+', ' ', clean_konten).strip()
 
-                # Detail endpoint
-                api_detail_url = f"https://www.atrbpn.go.id/items/berita/{berita_id}?fields=konten"
-                
-                try:
-                    detail_res = scraper.get(api_detail_url, headers=headers, timeout=20)
-                    detail_data = detail_res.json().get('data', {})
-                    raw_content = detail_data.get('konten', '')
-
-                    # Pembersihan HTML yang lebih rapi
-                    clean_content = re.sub(r'<[^>]+>', '', raw_content) # Hapus semua tag HTML
-                    clean_content = re.sub(r'\s+', ' ', clean_content).strip() # Rapikan spasi
-
-                    results.append({
-                        "judul": judul,
-                        "tanggal": tgl_rilis,
-                        "url": url_web,
-                        "konten": clean_content
-                    })
-                    time.sleep(2) 
-                except:
-                    continue
+                results.append({
+                    "judul": judul,
+                    "tanggal": tgl,
+                    "url": f"https://www.atrbpn.go.id/berita/detail/{item.get('slug')}",
+                    "konten": clean_content_safety(clean_konten)
+                })
 
     except Exception as e:
-        print(f"💥 Error: {e}")
+        print(f"💥 Terjadi kesalahan teknis: {e}")
 
+    # Simpan hasil
+    save_to_csv(results)
+
+def scrape_fallback_html(scraper, headers, month, year):
+    print("⚠️ Mencoba metode Fallback (HTML Parsing)...")
+    try:
+        res = scraper.get("https://www.atrbpn.go.id/berita", headers=headers, timeout=30)
+        # Tambahkan logika parsing BeautifulSoup sederhana di sini jika perlu
+        # Tapi jika API saja 403, biasanya HTML juga akan kena tantangan Cloudflare (JS Challenge)
+        print("❌ Metode Fallback juga terhambat proteksi tingkat tinggi.")
+    except:
+        pass
+
+def clean_content_safety(text):
+    # Mengambil 500 kata pertama agar CSV tidak rusak
+    words = text.split()
+    return " ".join(words[:500])
+
+def save_to_csv(results):
     if results:
         df = pd.DataFrame(results)
         df.to_csv('berita-mei-2026.csv', index=False, encoding='utf-8', quoting=1)
-        print(f"✅ BERHASIL! {len(results)} data tersimpan.")
+        print(f"📊 SELESAI: {len(results)} data berhasil disimpan ke CSV.")
     else:
-        print("📊 Selesai. Tidak ada data yang ditemukan.")
+        print("📊 SELESAI: Tidak ada data yang bisa diambil.")
 
 if __name__ == "__main__":
-    scrape_atr_bpn_api()
+    scrape_atr_bpn_final()
