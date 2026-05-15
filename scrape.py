@@ -1,93 +1,86 @@
 import cloudscraper
 import pandas as pd
-from bs4 import BeautifulSoup
+import json
 import time
-import os
 
-def scrape_atr_bpn():
-    # Inisialisasi scraper yang bisa bypass bot-protection
-    scraper = cloudscraper.create_scraper(
-        browser={
-            'browser': 'chrome',
-            'platform': 'windows',
-            'desktop': True
-        }
-    )
+def scrape_atr_bpn_api():
+    # Inisialisasi scraper untuk bypass proteksi Cloudflare
+    scraper = cloudscraper.create_scraper()
     
-    target_month = "/05/2026"
+    target_month = "05"
+    target_year = "2026"
     results = []
 
-    print("📅 START SCRAPING MEI 2026 (via CloudScraper)")
+    print(f"📅 START SCRAPING MEI 2026 (via Directus API)")
+
+    # 1. Endpoint API untuk mengambil daftar berita terbaru
+    # Kita menggunakan limit 50 untuk memastikan berita bulan Mei ter-cover
+    api_list_url = "https://www.atrbpn.go.id/items/berita?sort=-tanggal_rilis&limit=50&fields=id,judul,tanggal_rilis,slug"
 
     try:
-        # 1. Ambil halaman daftar berita
-        # Gunakan URL publikasi agar lebih spesifik
-        url_main = "https://www.atrbpn.go.id/publikasi/berita"
-        response = scraper.get(url_main, timeout=30)
-        
+        response = scraper.get(api_list_url, timeout=30)
         if response.status_code != 200:
-            print(f"❌ Gagal akses. Status: {response.status_code}")
+            print(f"❌ Gagal akses API List. Status: {response.status_code}")
             return
 
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Mencari elemen kartu berita
-        items = soup.select(".col-md-3.col-6") or soup.find_all('div', class_='card')
-        print(f"🔍 Items ditemukan di halaman utama: {len(items)}")
+        data_berita = response.json().get('data', [])
+        print(f"🔍 Ditemukan {len(data_berita)} berita terbaru di server.")
 
-        for item in items:
-            try:
-                link_el = item.find('a')
-                if not link_el: continue
+        for berita in data_berita:
+            # Format tanggal dari API biasanya YYYY-MM-DD
+            tgl_rilis = berita.get('tanggal_rilis', '')
+            if not tgl_rilis: continue
+            
+            # Cek kecocokan bulan dan tahun
+            # Contoh tgl_rilis: "2026-05-15"
+            tahun_api = tgl_rilis.split('-')[0]
+            bulan_api = tgl_rilis.split('-')[1]
+
+            if bulan_api == target_month and tahun_api == target_year:
+                judul = berita.get('judul')
+                slug = berita.get('slug')
+                berita_id = berita.get('id')
                 
-                url = link_el['href']
-                # Pastikan URL lengkap
-                if not url.startswith('http'):
-                    url = "https://www.atrbpn.go.id" + url
-                    
-                title = link_el.text.strip()
-                date_text = item.get_text()
+                # URL halaman berita asli (untuk referensi di CSV)
+                url_web = f"https://www.atrbpn.go.id/berita/detail/{slug}"
+                
+                print(f"➡️ Mengambil konten: {judul[:50]}...")
 
-                # Cek apakah berita bulan Mei 2026
-                if target_month in date_text:
-                    print(f"➡️ Mengambil isi: {title[:50]}...")
-                    
-                    # 2. Ambil isi detail berita
-                    detail_res = scraper.get(url, timeout=20)
-                    detail_soup = BeautifulSoup(detail_res.text, 'html.parser')
-                    
-                    # Cari semua paragraf di dalam artikel
-                    # Biasanya berita ada di dalam tag <article> atau div dengan class tertentu
-                    content_area = detail_soup.find('article') or detail_soup.find('div', class_='entry-content')
-                    
-                    if content_area:
-                        paragraphs = content_area.find_all('p')
-                    else:
-                        paragraphs = detail_soup.find_all('p')
+                # 2. Ambil konten detail menggunakan endpoint yang kamu temukan
+                # Catatan: Kita sesuaikan parameter fields-nya agar mendapatkan konten teks
+                api_detail_url = f"https://www.atrbpn.go.id/items/berita/{berita_id}?fields=konten"
+                
+                try:
+                    detail_res = scraper.get(api_detail_url, timeout=20)
+                    detail_data = detail_res.json().get('data', {})
+                    raw_content = detail_data.get('konten', '')
 
-                    content = "\n\n".join([p.get_text().strip() for p in paragraphs if len(p.get_text()) > 25])
+                    # Konten dari API biasanya berbentuk HTML, kita bersihkan sedikit
+                    # (Menghapus tag HTML sederhana agar teksnya bersih di CSV)
+                    import re
+                    clean_content = re.sub('<[^<]+?>', '', raw_content)
 
                     results.append({
-                        "judul": title,
-                        "tanggal": date_text.strip().split('\n')[0],
-                        "url": url,
-                        "konten": content
+                        "judul": judul,
+                        "tanggal": tgl_rilis,
+                        "url": url_web,
+                        "konten": clean_content.strip()
                     })
-                    time.sleep(2) # Jeda sopan agar tidak diblokir
-            except Exception as e:
-                print(f"⚠️ Skip satu item karena error: {e}")
-                continue
+                    
+                    time.sleep(1) # Jeda singkat
+                except Exception as e:
+                    print(f"   ❌ Gagal ambil detail ID {berita_id}: {e}")
 
     except Exception as e:
         print(f"💥 Error Utama: {e}")
 
-    # 3. Simpan hasil ke CSV menggunakan Pandas (lebih aman untuk karakter spesial)
+    # 3. Simpan hasil
     if results:
         df = pd.DataFrame(results)
         df.to_csv('berita-mei-2026.csv', index=False, encoding='utf-8', quoting=1)
-        print(f"✅ BERHASIL! {len(results)} berita Mei 2026 tersimpan di CSV.")
+        print(f"✅ BERHASIL! {len(results)} data dari API tersimpan.")
     else:
-        print("📊 SELESAI. Tidak ada berita Mei 2026 yang ditemukan hari ini.")
+        print("📊 SELESAI. Tidak ada data yang cocok dengan kriteria API.")
 
 if __name__ == "__main__":
-    scrape_atr_bpn()
+    scrape_atr_bpn_api()
