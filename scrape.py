@@ -17,6 +17,8 @@ Pengambilan isi berita (parse_detail) memakai beberapa cara berurutan:
   3. Blok teks umum di halaman (p, li, blockquote, div berisi teks).
   4. JSON-LD (articleBody).
   5. Meta description (cuplikan singkat, pilihan terakhir).
+Kalau hasilnya masih pendek, halaman dibuka ulang di browser sungguhan (Playwright)
+supaya isi yang dimuat lewat JavaScript ikut terbaca.
 """
 import json
 import os
@@ -35,6 +37,7 @@ LIST_URL = BASE + "/berita"
 MAX_PAGES = 40         # batas aman penelusuran halaman daftar
 DELAY = 1.5            # jeda antar request (detik)
 MAX_WORDS = 600        # batas panjang isi berita yang disimpan
+MIN_REUSE = 150        # isi lama di CSV yang lebih pendek dari ini dicoba ambil ulang
 MIN_GOOD = 300         # isi dianggap "cukup" kalau minimal sekian karakter
 
 BULAN = {
@@ -360,7 +363,64 @@ def parse_detail(html: str):
     return gambar, "\n".join(chosen)
 
 
+
 # ---------------------------------------------------------------------------
+# Render dengan browser sungguhan (untuk isi yang dimuat lewat JavaScript)
+# ---------------------------------------------------------------------------
+_PW = {"pw": None, "browser": None, "ctx": None, "failed": False}
+
+
+def fetch_rendered(url: str, timeout_ms: int = 40000):
+    """Buka halaman di Chromium, tunggu teks berita muncul, kembalikan HTML-nya."""
+    if _PW["failed"]:
+        return None
+    try:
+        if _PW["browser"] is None:
+            from playwright.sync_api import sync_playwright
+            _PW["pw"] = sync_playwright().start()
+            _PW["browser"] = _PW["pw"].chromium.launch(headless=True)
+            _PW["ctx"] = _PW["browser"].new_context(
+                locale="id-ID",
+                viewport={"width": 1366, "height": 900},
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+            )
+        page = _PW["ctx"].new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            try:  # tunggu sampai ada paragraf isi (bukan sekadar caption foto)
+                page.wait_for_function(
+                    "() => [...document.querySelectorAll('div.prose p')]"
+                    ".some(p => p.innerText.trim().length > 80)",
+                    timeout=20000,
+                )
+            except Exception:
+                print("   ⚠️ Browser: paragraf isi tidak muncul dalam 20 detik")
+            page.wait_for_timeout(800)
+            return page.content()
+        finally:
+            page.close()
+    except ImportError:
+        print("   ⚠️ Playwright belum terpasang (pip install playwright && "
+              "python -m playwright install --with-deps chromium)")
+        _PW["failed"] = True
+    except Exception as e:
+        print(f"   ⚠️ Render browser gagal: {e}")
+        if _PW["browser"] is None:
+            _PW["failed"] = True
+    return None
+
+
+def close_rendered():
+    try:
+        if _PW["browser"]:
+            _PW["browser"].close()
+        if _PW["pw"]:
+            _PW["pw"].stop()
+    except Exception:
+        pass
+
+
 def load_existing(csv_filename: str) -> dict:
     if not os.path.exists(csv_filename):
         return {}
@@ -426,12 +486,19 @@ def scrape_atr_bpn_auto():
 
         for it in [x for x in matched if x["ym"] == ym]:
             old = existing.get(it["url"])
-            if old and old.get("content"):
+            if old and len(old.get("content", "")) >= MIN_REUSE:
                 rows.append({c: old.get(c, "") for c in COLUMNS})
                 continue
             time.sleep(DELAY)
             html = fetch(scraper, it["url"])
             gambar, konten = parse_detail(html) if html else ("", "")
+            if len(konten) < MIN_GOOD:
+                print("   🌐 Isi kurang dari cara biasa -> coba render browser")
+                rhtml = fetch_rendered(it["url"])
+                if rhtml:
+                    g2, k2 = parse_detail(rhtml)
+                    if len(k2) > len(konten):
+                        konten, gambar = k2, (gambar or g2)
             if not konten:
                 print(f"   ⚠️ Isi kosong untuk: {it['url']}")
             rows.append({
@@ -449,4 +516,7 @@ def scrape_atr_bpn_auto():
 
 
 if __name__ == "__main__":
-    scrape_atr_bpn_auto()
+    try:
+        scrape_atr_bpn_auto()
+    finally:
+        close_rendered()
