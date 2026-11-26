@@ -2,25 +2,31 @@ name: Auto Scrape Berita ATR/BPN
 
 on:
   schedule:
-    # Jalan otomatis setiap hari pukul 01:00 UTC (08:00 WIB)
+    # Setiap hari pukul 01:00 UTC (08:00 WIB)
     - cron: "0 1 * * *"
   workflow_dispatch:
     inputs:
       target_month:
-        description: "Bulan (MM), kosongkan untuk bulan berjalan"
+        description: "Bulan (MM), kosongkan = bulan berjalan + bulan lalu"
         required: false
         default: ""
       target_year:
-        description: "Tahun (YYYY), kosongkan untuk tahun berjalan"
+        description: "Tahun (YYYY), kosongkan = tahun berjalan"
         required: false
         default: ""
 
 permissions:
   contents: write
+  pages: write
+
+concurrency:
+  group: scrape-berita
+  cancel-in-progress: false
 
 jobs:
   scrape-and-update:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,12 +35,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install cloudscraper pandas
+          pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
 
       - name: Run scraper
         env:
@@ -46,10 +55,19 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add berita-*.csv
+          # bersihkan file sisa dari versi lama yang salah nama
+          git rm -f --ignore-unmatch "berita--.csv" || true
+          git add berita-????-??.csv
           if git diff --staged --quiet; then
             echo "Tidak ada perubahan pada file CSV."
           else
             git commit -m "chore: update berita otomatis $(date -u +'%Y-%m-%d')"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
             git push
           fi
+
+      - name: Trigger GitHub Pages build
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"
