@@ -17,18 +17,18 @@
                 </a>
                 <p class="text-xs text-blue-200 mt-0.5">Satuan Kerja: Kanwil BPN Provinsi Riau Kepulauan</p>
             </div>
-            <div class="bg-blue-800/50 border border-blue-700 px-3 py-1.5 rounded-full text-xs font-semibold tracking-wider text-blue-100 uppercase">
-                📅 Periode Mei 2026
+            <div id="periode-badge" class="bg-blue-800/50 border border-blue-700 px-3 py-1.5 rounded-full text-xs font-semibold tracking-wider text-blue-100 uppercase">
+                📅 Memuat Periode...
             </div>
         </div>
     </nav>
 
     <main id="homepage-view" class="container mx-auto py-10 px-4 flex-grow hidden">
         <div id="news-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            </div>
+        </div>
 
         <div class="flex justify-center items-center gap-2 mt-12 border-t border-slate-200 pt-8" id="pagination-container">
-            </div>
+        </div>
     </main>
 
     <main id="detail-view" class="container mx-auto py-10 px-4 max-w-4xl flex-grow hidden">
@@ -78,12 +78,20 @@
 
     <script>
         let articlesData = [];
-        
-        // KONFIGURASI PAGINASI
         const postsPerPage = 6;
         let currentPage = 1;
 
-        // Tangkap parameter URL browser (?id=... untuk detail, ?page=... untuk nomor halaman)
+        const now = new Date();
+        const year = now.getFullYear();
+        const monthNum = String(now.getMonth() + 1).padStart(2, "0");
+        const csvFileName = `berita-${year}-${monthNum}.csv`;
+
+        const namaBulan = now.toLocaleDateString("id-ID", { month: "long", year: "numeric" });
+        const periodeBadge = document.getElementById("periode-badge");
+        if (periodeBadge) {
+            periodeBadge.textContent = `📅 Periode ${namaBulan}`;
+        }
+
         const urlParams = new URLSearchParams(window.location.search);
         const articleId = urlParams.get('id');
         const pageParam = urlParams.get('page');
@@ -92,41 +100,40 @@
             currentPage = parseInt(pageParam) || 1;
         }
 
-        // Membaca berkas database CSV kamu (ganti nama jika file di repositori kamu berbeda)
-        Papa.parse("berita-mei-2026.csv", {
+        Papa.parse(csvFileName, {
             download: true,
             header: true,
             skipEmptyLines: true,
             complete: function(results) {
-                // Saring baris kosong yang tidak memiliki judul valid sebelum diolah
                 articlesData = results.data.filter(item => item.judul && item.judul.trim().toLowerCase() !== 'judul');
-                
                 document.getElementById('loading-view').classList.add('hidden');
 
-                // Sistem Routing Otomatis
                 if (articleId !== null && articlesData[articleId]) {
                     renderDetailView(articleId);
                 } else {
                     renderHomepageView();
                 }
+            },
+            error: function() {
+                document.getElementById('loading-view').classList.add('hidden');
+                document.getElementById('homepage-view').classList.remove('hidden');
+                document.getElementById('news-container').innerHTML =
+                    `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-500">⚠️ File <b>${csvFileName}</b> belum tersedia untuk periode ini.</div>`;
             }
         });
 
-        // FUNGSI UTAMA HALAMAN DEPAN (GRID + NOMOR NAVIGASI)
         function renderHomepageView() {
             const homepageView = document.getElementById('homepage-view');
             const container = document.getElementById('news-container');
-            container.innerHTML = ''; 
+            container.innerHTML = '';
 
             if (articlesData.length === 0) {
-                container.innerHTML = `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-400">⚠️ Database CSV kosong.</div>`;
+                container.innerHTML = `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-400">⚠️ Belum ada data berita untuk periode ${namaBulan}.</div>`;
+                homepageView.classList.remove('hidden');
                 return;
             }
 
-            // Hitung batasan data untuk halaman saat ini
             const totalPages = Math.ceil(articlesData.length / postsPerPage);
-            
-            // Jaga-jaga jika parameter halaman melampaui batas maks
             if (currentPage > totalPages) currentPage = totalPages;
             if (currentPage < 1) currentPage = 1;
 
@@ -134,13 +141,10 @@
             const endIndex = startIndex + postsPerPage;
             const paginatedItems = articlesData.slice(startIndex, endIndex);
 
-            // Render 6 Kartu Berita terpilih
             paginatedItems.forEach((item) => {
-                // Cari index asli dari array utama untuk pencocokan detail ID link
                 const originalIndex = articlesData.findIndex(p => p.judul === item.judul);
-
                 const judul = item.judul.trim();
-                const tanggal = item.tanggal ? item.tanggal.trim() : 'Mei 2026';
+                const tanggal = item.tanggal ? item.tanggal.trim() : namaBulan;
                 const urlAsli = item.url ? item.url.trim() : '#';
                 const gambarUrl = item.gambar ? item.gambar.trim() : '';
                 const kontenUtuh = item.content ? item.content.trim() : '';
@@ -189,19 +193,16 @@
                 container.innerHTML += card;
             });
 
-            // Render Tombol Angka Navigasi Halaman
             renderPaginationControls(totalPages);
             homepageView.classList.remove('hidden');
         }
 
-        // LOGIKA STRUKTUR TOMBOL ANGKA PAGINASI
         function renderPaginationControls(totalPages) {
             const paginationContainer = document.getElementById('pagination-container');
             paginationContainer.innerHTML = '';
 
-            if (totalPages <= 1) return; // Menyembunyikan komponen jika data hanya muat 1 halaman
+            if (totalPages <= 1) return;
 
-            // Tombol Halaman Sebelumnya (Sebelumnya)
             if (currentPage > 1) {
                 paginationContainer.innerHTML += `
                     <a href="index.html?page=${currentPage - 1}" class="px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-semibold rounded-xl hover:bg-slate-100 transition shadow-xs">
@@ -209,17 +210,15 @@
                     </a>`;
             }
 
-            // Loop Angka Halaman Berurutan
             for (let i = 1; i <= totalPages; i++) {
                 const isActive = i === currentPage;
-                const buttonClass = isActive 
-                    ? "px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl shadow-sm" 
+                const buttonClass = isActive
+                    ? "px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl shadow-sm"
                     : "px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-medium rounded-xl hover:bg-slate-100 transition";
-                
+
                 paginationContainer.innerHTML += `<a href="index.html?page=${i}" class="${buttonClass}">${i}</a>`;
             }
 
-            // Tombol Halaman Berikutnya (Selanjutnya)
             if (currentPage < totalPages) {
                 paginationContainer.innerHTML += `
                     <a href="index.html?page=${currentPage + 1}" class="px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-semibold rounded-xl hover:bg-slate-100 transition shadow-xs">
@@ -228,13 +227,12 @@
             }
         }
 
-        // FUNGSI MEMBUKA HALAMAN ARTIKEL UTUH
         function renderDetailView(index) {
             const detailView = document.getElementById('detail-view');
             const item = articlesData[index];
 
             document.getElementById('detail-title').innerText = item.judul || 'Rincian Berita';
-            document.getElementById('detail-date').innerText = `📅 Diterbitkan pada: ${item.tanggal || 'Mei 2026'}`;
+            document.getElementById('detail-date').innerText = `📅 Diterbitkan pada: ${item.tanggal || namaBulan}`;
             document.getElementById('detail-content').innerText = item.content || 'Konten teks utuh tidak tersedia.';
             document.getElementById('detail-original-url').href = item.url || '#';
 
@@ -262,10 +260,9 @@
 
         function handleDetailImageError(img) {
             document.getElementById('detail-image-fallback-text').classList.remove('hidden');
-            img.style.display = 'none'; 
+            img.style.display = 'none';
         }
 
-        // Fungsi khusus tombol kembali agar mengingat posisi halaman nomor terakhir pengguna
         function goBackToHome() {
             window.location.href = `index.html?page=${currentPage}`;
         }
