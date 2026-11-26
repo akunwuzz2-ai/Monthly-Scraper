@@ -24,11 +24,11 @@
     </nav>
 
     <main id="homepage-view" class="container mx-auto py-10 px-4 flex-grow hidden">
-        <div id="news-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        </div>
+        <div id="notice" class="hidden mb-6 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3"></div>
 
-        <div class="flex justify-center items-center gap-2 mt-12 border-t border-slate-200 pt-8" id="pagination-container">
-        </div>
+        <div id="news-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"></div>
+
+        <div class="flex flex-wrap justify-center items-center gap-2 mt-12 border-t border-slate-200 pt-8" id="pagination-container"></div>
     </main>
 
     <main id="detail-view" class="container mx-auto py-10 px-4 max-w-4xl flex-grow hidden">
@@ -45,21 +45,20 @@
             </div>
 
             <div id="detail-image-container" class="w-full rounded-xl overflow-hidden bg-slate-100 border border-slate-200 hidden">
-                <img id="detail-image" src="" class="w-full h-auto max-h-[500px] object-contain mx-auto" alt="Foto Publikasi" onerror="handleDetailImageError(this)">
+                <img id="detail-image" src="" class="w-full h-auto max-h-[500px] object-contain mx-auto" alt="Foto Publikasi" referrerpolicy="no-referrer" onerror="handleDetailImageError(this)">
                 <p id="detail-image-fallback-text" class="text-center text-xs text-amber-600 bg-amber-50 p-3 hidden border-t border-amber-100">
-                    ⚠️ Gambar dilindungi hak akses oleh server pusat. Silakan buka tautan alternatif di bawah untuk memuat foto secara manual.
+                    ⚠️ Gambar tidak dapat dimuat dari server pusat. Buka tautan gambar di bawah untuk melihatnya langsung.
                 </p>
             </div>
 
-            <div id="detail-content" class="text-slate-600 leading-relaxed text-base md:text-lg space-y-4 whitespace-pre-line border-t border-slate-100 pt-6">
-            </div>
+            <div id="detail-content" class="text-slate-600 leading-relaxed text-base md:text-lg space-y-4 whitespace-pre-line border-t border-slate-100 pt-6"></div>
 
             <div class="bg-slate-50 px-6 py-4 rounded-xl border border-slate-100 flex flex-col sm:flex-row justify-between items-center gap-3 mt-8">
                 <div class="flex gap-4">
-                    <a id="detail-original-url" href="#" target="_blank" class="text-xs md:text-sm text-blue-600 font-semibold hover:underline">
+                    <a id="detail-original-url" href="#" target="_blank" rel="noopener noreferrer" class="text-xs md:text-sm text-blue-600 font-semibold hover:underline">
                         🌐 Lihat Sumber Asli di Situs ATR/BPN ↗
                     </a>
-                    <a id="detail-image-url" href="#" target="_blank" class="text-xs md:text-sm text-amber-600 font-semibold hover:underline hidden">
+                    <a id="detail-image-url" href="#" target="_blank" rel="noopener noreferrer" class="text-xs md:text-sm text-amber-600 font-semibold hover:underline hidden">
                         🖼️ Buka Gambar di Tab Baru ↗
                     </a>
                 </div>
@@ -69,7 +68,7 @@
 
     <div id="loading-view" class="flex flex-col items-center justify-center py-40 flex-grow text-slate-500">
         <div class="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-        <p class="text-lg font-medium mt-4 animate-pulse">Menghubungkan Jalur Berita Dinamis...</p>
+        <p class="text-lg font-medium mt-4 animate-pulse">Memuat berita...</p>
     </div>
 
     <footer class="bg-slate-900 text-slate-400 py-6 text-center text-xs mt-auto">
@@ -77,60 +76,120 @@
     </footer>
 
     <script>
-        let articlesData = [];
+        // ---------- Pengaturan ----------
         const postsPerPage = 6;
-        let currentPage = 1;
+        const MAX_LOOKBACK = 6; // berapa bulan ke belakang dicoba jika bulan ini kosong
+        const PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="100%" height="100%" fill="#e2e8f0"/>' +
+            '<text x="50%" y="50%" fill="#64748b" font-family="sans-serif" font-size="28" text-anchor="middle">Kementerian ATR/BPN</text></svg>'
+        );
 
-        const now = new Date();
-        const year = now.getFullYear();
-        const monthNum = String(now.getMonth() + 1).padStart(2, "0");
-        const csvFileName = `berita-${year}-${monthNum}.csv`;
+        // ---------- State ----------
+        let articlesData = [];
+        let activeYM = null;
+        const params = new URLSearchParams(window.location.search);
+        const articleId = params.get('id');
+        const requestedMonth = params.get('m');
+        let currentPage = parseInt(params.get('page')) || 1;
 
-        const namaBulan = now.toLocaleDateString("id-ID", { month: "long", year: "numeric" });
-        const periodeBadge = document.getElementById("periode-badge");
-        if (periodeBadge) {
-            periodeBadge.textContent = `📅 Periode ${namaBulan}`;
+        // ---------- Helper ----------
+        function esc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+        function safeUrl(u) {
+            u = (u || '').trim();
+            return /^https?:\/\//i.test(u) ? u : '';
+        }
+        function pad(n) { return String(n).padStart(2, '0'); }
+        function ymKey(ym) { return `${ym.y}-${pad(ym.m)}`; }
+        function parseYM(s) {
+            const m = /^(\d{4})-(\d{2})$/.exec(s || '');
+            return m ? { y: +m[1], m: +m[2] } : null;
+        }
+        function shiftYM(ym, delta) {
+            const idx = ym.y * 12 + (ym.m - 1) + delta;
+            return { y: Math.floor(idx / 12), m: (idx % 12) + 1 };
+        }
+        function labelYM(ym) {
+            return new Date(ym.y, ym.m - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+        }
+        function pageLink(page, id) {
+            let q = `m=${ymKey(activeYM)}&page=${page}`;
+            if (id !== undefined) q += `&id=${id}`;
+            return `index.html?${q}`;
+        }
+        function imgFallback(img) {
+            img.onerror = null;
+            img.src = PLACEHOLDER;
         }
 
-        const urlParams = new URLSearchParams(window.location.search);
-        const articleId = urlParams.get('id');
-        const pageParam = urlParams.get('page');
-
-        if (pageParam) {
-            currentPage = parseInt(pageParam) || 1;
+        function loadCsv(fileName) {
+            return new Promise(resolve => {
+                Papa.parse(fileName, {
+                    download: true,
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: r => resolve(
+                        (r.data || []).filter(i => i.judul && i.judul.trim() && i.judul.trim().toLowerCase() !== 'judul')
+                    ),
+                    error: () => resolve(null)
+                });
+            });
         }
 
-        Papa.parse(csvFileName, {
-            download: true,
-            header: true,
-            skipEmptyLines: true,
-            complete: function(results) {
-                articlesData = results.data.filter(item => item.judul && item.judul.trim().toLowerCase() !== 'judul');
-                document.getElementById('loading-view').classList.add('hidden');
+        // ---------- Inisialisasi ----------
+        async function init() {
+            const now = new Date();
+            const thisMonth = { y: now.getFullYear(), m: now.getMonth() + 1 };
+            const start = parseYM(requestedMonth) || thisMonth;
 
-                if (articleId !== null && articlesData[articleId]) {
-                    renderDetailView(articleId);
-                } else {
-                    renderHomepageView();
+            for (let i = 0; i <= MAX_LOOKBACK; i++) {
+                const ym = shiftYM(start, -i);
+                const rows = await loadCsv(`berita-${ymKey(ym)}.csv`);
+                if (rows && rows.length) {
+                    articlesData = rows;
+                    activeYM = ym;
+                    break;
                 }
-            },
-            error: function() {
-                document.getElementById('loading-view').classList.add('hidden');
+            }
+
+            document.getElementById('loading-view').classList.add('hidden');
+            const badge = document.getElementById('periode-badge');
+
+            if (!activeYM) {
+                activeYM = start;
+                badge.textContent = `📅 Periode ${labelYM(start)}`;
                 document.getElementById('homepage-view').classList.remove('hidden');
                 document.getElementById('news-container').innerHTML =
-                    `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-500">⚠️ File <b>${csvFileName}</b> belum tersedia untuk periode ini.</div>`;
+                    `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-500">
+                        ⚠️ Belum ada data berita dalam ${MAX_LOOKBACK + 1} bulan terakhir.<br>
+                        <span class="text-xs">Jalankan workflow <b>Auto Scrape Berita ATR/BPN</b> di tab Actions, lalu muat ulang halaman ini.</span>
+                    </div>`;
+                return;
             }
-        });
 
-        function renderHomepageView() {
+            badge.textContent = `📅 Periode ${labelYM(activeYM)}`;
+
+            const detailIndex = articleId !== null ? parseInt(articleId, 10) : NaN;
+            if (!isNaN(detailIndex) && articlesData[detailIndex]) {
+                renderDetailView(detailIndex);
+            } else {
+                renderHomepageView(thisMonth);
+            }
+        }
+
+        // ---------- Beranda ----------
+        function renderHomepageView(thisMonth) {
             const homepageView = document.getElementById('homepage-view');
             const container = document.getElementById('news-container');
+            const notice = document.getElementById('notice');
             container.innerHTML = '';
 
-            if (articlesData.length === 0) {
-                container.innerHTML = `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-400">⚠️ Belum ada data berita untuk periode ${namaBulan}.</div>`;
-                homepageView.classList.remove('hidden');
-                return;
+            if (thisMonth && ymKey(activeYM) !== ymKey(thisMonth) && !requestedMonth) {
+                notice.textContent = `Belum ada berita untuk ${labelYM(thisMonth)}. Menampilkan berita terbaru dari ${labelYM(activeYM)}.`;
+                notice.classList.remove('hidden');
             }
 
             const totalPages = Math.ceil(articlesData.length / postsPerPage);
@@ -138,103 +197,85 @@
             if (currentPage < 1) currentPage = 1;
 
             const startIndex = (currentPage - 1) * postsPerPage;
-            const endIndex = startIndex + postsPerPage;
-            const paginatedItems = articlesData.slice(startIndex, endIndex);
+            const pageItems = articlesData.slice(startIndex, startIndex + postsPerPage);
 
-            paginatedItems.forEach((item) => {
-                const originalIndex = articlesData.findIndex(p => p.judul === item.judul);
-                const judul = item.judul.trim();
-                const tanggal = item.tanggal ? item.tanggal.trim() : namaBulan;
-                const urlAsli = item.url ? item.url.trim() : '#';
-                const gambarUrl = item.gambar ? item.gambar.trim() : '';
-                const kontenUtuh = item.content ? item.content.trim() : '';
+            let html = '';
+            pageItems.forEach((item, i) => {
+                const idx = startIndex + i;
+                const judul = esc(item.judul.trim());
+                const tanggal = esc((item.tanggal || '').trim() || labelYM(activeYM));
+                const urlAsli = esc(safeUrl(item.url) || '#');
+                const gambar = safeUrl(item.gambar);
+                const konten = (item.content || '').trim();
 
                 let cuplikan = 'Klik tombol di bawah untuk melihat rincian berita selengkapnya.';
-                if (kontenUtuh.length > 0) {
-                    if (kontenUtuh.length > 120) {
-                        cuplikan = kontenUtuh.substring(0, kontenUtuh.lastIndexOf(' ', 120)) + '...';
-                    } else {
-                        cuplikan = kontenUtuh;
-                    }
+                if (konten.length > 0) {
+                    cuplikan = konten.length > 120
+                        ? konten.substring(0, konten.lastIndexOf(' ', 120) > 0 ? konten.lastIndexOf(' ', 120) : 120) + '...'
+                        : konten;
                 }
 
-                const displayGambar = gambarUrl !== '' ? gambarUrl : 'https://via.placeholder.com/600x400?text=Kementerian+ATR/BPN';
-
-                const card = `
+                html += `
                     <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between">
                         <div>
                             <div class="h-48 w-full bg-slate-100 relative overflow-hidden border-b border-slate-100">
-                                <img src="${displayGambar}" class="w-full h-full object-cover" alt="Thumbnail" onerror="this.onerror=null; this.src='https://via.placeholder.com/600x400?text=ATR/BPN+Kepri';">
+                                <img src="${esc(gambar || PLACEHOLDER)}" class="w-full h-full object-cover" alt="Thumbnail" loading="lazy" referrerpolicy="no-referrer" onerror="imgFallback(this)">
                                 <span class="absolute bottom-3 left-3 bg-blue-600 text-white font-bold text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-md shadow-sm">
                                     📅 ${tanggal}
                                 </span>
                             </div>
-
                             <div class="p-6">
-                                <h2 class="text-base font-bold text-slate-800 leading-snug mb-2 text-ellipsis overflow-hidden" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;" title="${judul}">
-                                    <a href="index.html?id=${originalIndex}&page=${currentPage}" class="hover:text-blue-700 transition">${judul}</a>
+                                <h2 class="text-base font-bold text-slate-800 leading-snug mb-2 overflow-hidden" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;" title="${judul}">
+                                    <a href="${pageLink(currentPage, idx)}" class="hover:text-blue-700 transition">${judul}</a>
                                 </h2>
-                                <p class="text-slate-500 text-xs md:text-sm leading-relaxed mb-3">
-                                    ${cuplikan}
-                                </p>
-                                <a href="${urlAsli}" target="_blank" class="inline-flex items-center text-xs text-blue-400 font-medium hover:underline gap-1">
+                                <p class="text-slate-500 text-xs md:text-sm leading-relaxed mb-3">${esc(cuplikan)}</p>
+                                <a href="${urlAsli}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center text-xs text-blue-400 font-medium hover:underline gap-1">
                                     🔗 Buka Publikasi Asli Pusat ↗
                                 </a>
                             </div>
                         </div>
-
                         <div class="px-6 pb-6 pt-2">
-                            <a href="index.html?id=${originalIndex}&page=${currentPage}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl text-xs md:text-sm shadow-sm transition text-center block">
+                            <a href="${pageLink(currentPage, idx)}" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 px-4 rounded-xl text-xs md:text-sm shadow-sm transition text-center block">
                                 Baca Selengkapnya
                             </a>
                         </div>
-                    </div>
-                `;
-                container.innerHTML += card;
+                    </div>`;
             });
+            container.innerHTML = html;
 
             renderPaginationControls(totalPages);
             homepageView.classList.remove('hidden');
         }
 
         function renderPaginationControls(totalPages) {
-            const paginationContainer = document.getElementById('pagination-container');
-            paginationContainer.innerHTML = '';
-
+            const box = document.getElementById('pagination-container');
+            box.innerHTML = '';
             if (totalPages <= 1) return;
 
-            if (currentPage > 1) {
-                paginationContainer.innerHTML += `
-                    <a href="index.html?page=${currentPage - 1}" class="px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-semibold rounded-xl hover:bg-slate-100 transition shadow-xs">
-                        ⬅️
-                    </a>`;
-            }
+            const nav = 'px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-semibold rounded-xl hover:bg-slate-100 transition';
+            let html = '';
+            if (currentPage > 1) html += `<a href="${pageLink(currentPage - 1)}" class="${nav}">⬅️</a>`;
 
             for (let i = 1; i <= totalPages; i++) {
-                const isActive = i === currentPage;
-                const buttonClass = isActive
-                    ? "px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl shadow-sm"
-                    : "px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-medium rounded-xl hover:bg-slate-100 transition";
-
-                paginationContainer.innerHTML += `<a href="index.html?page=${i}" class="${buttonClass}">${i}</a>`;
+                const cls = i === currentPage
+                    ? 'px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl shadow-sm'
+                    : 'px-4 py-2 bg-white border border-slate-200 text-slate-700 text-xs font-medium rounded-xl hover:bg-slate-100 transition';
+                html += `<a href="${pageLink(i)}" class="${cls}">${i}</a>`;
             }
 
-            if (currentPage < totalPages) {
-                paginationContainer.innerHTML += `
-                    <a href="index.html?page=${currentPage + 1}" class="px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-semibold rounded-xl hover:bg-slate-100 transition shadow-xs">
-                        ➡️
-                    </a>`;
-            }
+            if (currentPage < totalPages) html += `<a href="${pageLink(currentPage + 1)}" class="${nav}">➡️</a>`;
+            box.innerHTML = html;
         }
 
+        // ---------- Detail ----------
         function renderDetailView(index) {
-            const detailView = document.getElementById('detail-view');
             const item = articlesData[index];
 
-            document.getElementById('detail-title').innerText = item.judul || 'Rincian Berita';
-            document.getElementById('detail-date').innerText = `📅 Diterbitkan pada: ${item.tanggal || namaBulan}`;
-            document.getElementById('detail-content').innerText = item.content || 'Konten teks utuh tidak tersedia.';
-            document.getElementById('detail-original-url').href = item.url || '#';
+            document.getElementById('detail-title').textContent = item.judul || 'Rincian Berita';
+            document.getElementById('detail-date').textContent = `📅 Diterbitkan pada: ${item.tanggal || labelYM(activeYM)}`;
+            document.getElementById('detail-content').textContent =
+                (item.content || '').trim() || 'Isi berita tidak tersedia di sini. Silakan buka sumber asli di situs ATR/BPN.';
+            document.getElementById('detail-original-url').href = safeUrl(item.url) || '#';
 
             const imgContainer = document.getElementById('detail-image-container');
             const detailImg = document.getElementById('detail-image');
@@ -245,17 +286,18 @@
             imgBtn.classList.add('hidden');
             detailImg.style.display = 'block';
 
-            if (item.gambar && item.gambar.trim() !== '') {
-                detailImg.src = item.gambar.trim();
+            const gambar = safeUrl(item.gambar);
+            if (gambar) {
+                detailImg.src = gambar;
                 imgContainer.classList.remove('hidden');
-                imgBtn.href = item.gambar.trim();
+                imgBtn.href = gambar;
                 imgBtn.classList.remove('hidden');
             } else {
                 imgContainer.classList.add('hidden');
             }
 
-            document.title = item.judul ? `${item.judul} - Monitoring BPN` : document.title;
-            detailView.classList.remove('hidden');
+            if (item.judul) document.title = `${item.judul} - Monitoring BPN`;
+            document.getElementById('detail-view').classList.remove('hidden');
         }
 
         function handleDetailImageError(img) {
@@ -264,8 +306,10 @@
         }
 
         function goBackToHome() {
-            window.location.href = `index.html?page=${currentPage}`;
+            window.location.href = pageLink(currentPage);
         }
+
+        init();
     </script>
 </body>
 </html>
