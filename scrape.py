@@ -1,471 +1,522 @@
 """
-Scraper berita daerah: Kantor Pertanahan Kabupaten Bintan
-(https://kab-bintan.atrbpn.go.id/berita)
+Scraper berita Kementerian ATR/BPN (https://www.atrbpn.go.id/berita)
 
-Hasil: berita-bintan-YYYY-MM.csv dengan kolom judul, tanggal, url, gambar, content
-(kolom sama dengan scrape.py, hanya nama file berbeda supaya tidak bentrok).
+Hasil: berita-YYYY-MM.csv dengan kolom judul, tanggal, url, gambar, content.
 
-Perbedaan utama dengan scrape.py:
-- Situs Bintan adalah aplikasi JavaScript (HTML awalnya kosong), jadi SEMUA halaman
-  dibuka lewat browser sungguhan (Playwright), bukan cloudscraper.
-- Pola halaman tidak diasumsikan kaku: tautan berita dicari lewat pola /berita/<slug>,
-  tanggal dicari dengan beberapa format, dan paginasi dicoba lewat ?page=N lalu
-  lewat klik tombol "berikutnya"/scroll.
-
-Cara kerja periode sama dengan scrape.py:
-- Tanpa TARGET_MONTH/TARGET_YEAR -> bulan berjalan + bulan sebelumnya (WIB).
+Cara kerja:
+- Tanpa TARGET_MONTH/TARGET_YEAR  -> bulan berjalan + bulan sebelumnya (WIB).
 - Dengan TARGET_MONTH / TARGET_YEAR -> hanya periode itu.
 - Berita yang sudah ada di CSV (url sama, isi sudah terisi) tidak diunduh ulang.
-- Kalau daftar berita tidak terbaca, script keluar dengan kode 1, menyimpan
-  debug-bintan.html untuk diperiksa, dan TIDAK menimpa CSV lama.
+  Berita yang isinya masih kosong akan dicoba lagi di run berikutnya.
+- Kalau situs tidak bisa diakses, script keluar dengan kode 1 (job merah di Actions)
+  dan TIDAK menimpa CSV lama.
+
+Pengambilan isi berita (parse_detail) memakai beberapa cara berurutan:
+  1. div.prose berisi <p> (struktur halaman ATR/BPN yang sebenarnya).
+  2. Data JSON/RSC yang disisipkan Next.js (self.__next_f / __NEXT_DATA__).
+  3. Blok teks umum di halaman (p, li, blockquote, div berisi teks).
+  4. JSON-LD (articleBody).
+  5. Meta description (cuplikan singkat, pilihan terakhir).
+Kalau hasilnya masih pendek, halaman dibuka ulang di browser sungguhan (Playwright)
+supaya isi yang dimuat lewat JavaScript ikut terbaca.
 """
+import json
+import os
 import re
 import sys
-from urllib.parse import urljoin, urlparse
+import time
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urljoin
 
+import cloudscraper
 import pandas as pd
 from bs4 import BeautifulSoup
 
-import scrape as pusat  # pakai ulang fungsi bantu dari scrape.py
-from scrape import (BULAN, COLUMNS, MIN_GOOD, MIN_REUSE, clean_content_safety,
-                    determine_targets, load_existing)
-
-BASE = "https://kab-bintan.atrbpn.go.id"
+BASE = "https://www.atrbpn.go.id"
 LIST_URL = BASE + "/berita"
-pusat.BASE = BASE        # parse_detail() memakai BASE untuk mengubah og:image relatif
-MAX_PAGES = 15           # batas aman penelusuran halaman daftar
-MAX_SCROLL = 8           # batas scroll per halaman (untuk daftar "infinite scroll")
-DELAY_MS = 1200          # jeda antar halaman (milidetik)
-CSV_PREFIX = "berita-bintan"
-DEBUG_FILE = "debug-bintan.html"
+MAX_PAGES = 40         # batas aman penelusuran halaman daftar
+DELAY = 1.5            # jeda antar request (detik)
+MAX_WORDS = 600        # batas panjang isi berita yang disimpan
+MIN_REUSE = 150        # isi lama di CSV yang lebih pendek dari ini dicoba ambil ulang
+MIN_GOOD = 300         # isi dianggap "cukup" kalau minimal sekian karakter
 
-# Segmen setelah /berita/ yang BUKAN artikel (kategori, tag, dsb.)
-SKIP_SEGMENTS = {"kategori", "category", "tag", "tags", "page", "arsip", "archive", "search", "cari"}
+BULAN = {
+    "januari": 1, "februari": 2, "maret": 3, "april": 4, "mei": 5, "juni": 6,
+    "juli": 7, "agustus": 8, "september": 9, "oktober": 10, "november": 11, "desember": 12,
+}
+DATE_RE = re.compile(r"(\d{1,2})\s+(" + "|".join(BULAN) + r")\s+(\d{4})", re.I)
+LINK_RE = re.compile(r"^(?:https://www\.atrbpn\.go\.id)?/berita/[^/?#]+/?$")
+COLUMNS = ["judul", "tanggal", "url", "gambar", "content"]
 
-# ---------------------------------------------------------------------------
-# Tanggal
-# ---------------------------------------------------------------------------
-MONTH_ALIASES = dict(BULAN)
-MONTH_ALIASES.update({
-    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "agu": 8, "agt": 8,
-    "ags": 8, "sep": 9, "sept": 9, "okt": 10, "nov": 11, "des": 12,
-    "january": 1, "february": 2, "march": 3, "may": 5, "june": 6, "july": 7,
-    "august": 8, "aug": 8, "october": 10, "oct": 10, "december": 12, "dec": 12,
-})
-_MON = "|".join(sorted(MONTH_ALIASES, key=len, reverse=True))
-NAMA_BULAN = {v: k.capitalize() for k, v in BULAN.items()}
-
-DATE_PATTERNS = [
-    (re.compile(r"(\d{4})-(\d{2})-(\d{2})"), lambda m: (int(m[1]), int(m[2]), int(m[3]))),
-    (re.compile(rf"(\d{{1,2}})\s+({_MON})\.?,?\s+(\d{{4}})", re.I),
-     lambda m: (int(m[3]), MONTH_ALIASES[m[2].lower()], int(m[1]))),
-    (re.compile(rf"({_MON})\.?\s+(\d{{1,2}}),?\s+(\d{{4}})", re.I),
-     lambda m: (int(m[3]), MONTH_ALIASES[m[1].lower()], int(m[2]))),
-    (re.compile(r"(\d{1,2})[/.](\d{1,2})[/.](\d{4})"), lambda m: (int(m[3]), int(m[2]), int(m[1]))),
-]
+# Teks yang bukan isi berita (menu, footer, kredit penulis, dsb.)
+BOILERPLATE = (
+    "hadir untuk memberikan pelayanan", "jl. sisingamangaraja", "chat only",
+    "surat@atrbpn", "open main menu", "kontak & alamat", "social media",
+    "bagikan", "penulis", "editor", "fotografer",
+)
 
 
-def find_date(text: str):
-    """Kembalikan (tahun, bulan, hari) pertama yang valid dari sebuah teks, atau None."""
-    for rx, conv in DATE_PATTERNS:
-        for m in rx.finditer(text or ""):
-            try:
-                y, mo, d = conv(m)
-            except (KeyError, ValueError):
-                continue
-            if 2000 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31:
-                return (y, mo, d)
+def clean_content_safety(text: str, max_words: int = MAX_WORDS) -> str:
+    """Batasi jumlah kata tetapi pertahankan pemisah paragraf."""
+    out, count = [], 0
+    for para in re.split(r"\n+", text or ""):
+        words = para.split()
+        if not words:
+            continue
+        if count + len(words) > max_words:
+            out.append(" ".join(words[: max_words - count]))
+            break
+        out.append(" ".join(words))
+        count += len(words)
+    return "\n\n".join(out)
+
+
+def shift_month(year: int, month: int, delta: int):
+    idx = year * 12 + (month - 1) + delta
+    return idx // 12, idx % 12 + 1
+
+
+def fetch(scraper, url: str, retries: int = 3):
+    for attempt in range(1, retries + 1):
+        try:
+            r = scraper.get(url, timeout=30)
+            print(f"   GET {url} -> {r.status_code}")
+            if r.status_code == 200:
+                return r.text
+            if r.status_code in (403, 429, 503):
+                print(f"   ⚠️ Kemungkinan diblokir. Cuplikan respons: {r.text[:150]!r}")
+        except Exception as e:
+            print(f"   ⚠️ Percobaan {attempt} gagal: {e}")
+        time.sleep(3 * attempt)
     return None
 
 
-def fmt_date(d) -> str:
-    return f"{d[2]} {NAMA_BULAN[d[1]]} {d[0]}"
-
-
-# ---------------------------------------------------------------------------
-# Daftar berita
-# ---------------------------------------------------------------------------
-def norm_url(href: str):
-    """Kembalikan URL artikel yang sudah dinormalkan, atau None kalau bukan artikel."""
-    u = urlparse(urljoin(BASE + "/", href or ""))
-    if u.netloc != urlparse(BASE).netloc:
-        return None
-    parts = [p for p in u.path.split("/") if p]
-    if len(parts) < 2 or parts[0] != "berita" or parts[1].lower() in SKIP_SEGMENTS:
-        return None
-    return f"{BASE}/" + "/".join(parts)
-
-
-def _dedupe_title(title: str) -> str:
-    words = title.split()
-    n = len(words)
-    if n and n % 2 == 0 and words[: n // 2] == words[n // 2:]:
-        return " ".join(words[: n // 2])
-    return title
-
-
-def _card_of(a, url):
-    """Naik ke pembungkus terbesar yang hanya memuat tautan artikel ini (= 'kartu' berita)."""
-    card = a
-    for _ in range(6):
-        parent = card.parent
-        if parent is None or parent.name in ("body", "html"):
-            break
-        links = {norm_url(x["href"]) for x in parent.find_all("a", href=True)} - {None}
-        if links - {url}:
-            break
-        card = parent
-    return card
-
-
-def _img_src(card) -> str:
-    for img in card.find_all("img"):
-        for attr in ("src", "data-src", "data-lazy-src"):
-            src = (img.get(attr) or "").strip()
-            if not src and img.get("srcset"):
-                src = img["srcset"].split(",")[0].strip().split(" ")[0]
-            if src and not src.startswith("data:"):
-                return urljoin(BASE + "/", src)
-    return ""
-
-
 def parse_list(html: str) -> list:
-    """Ambil judul, tanggal, gambar, dan url dari halaman daftar berita."""
+    """Ambil judul, tanggal, dan url dari halaman daftar berita."""
     soup = BeautifulSoup(html, "html.parser")
-    found = {}
+    items, seen = [], set()
     for a in soup.find_all("a", href=True):
-        url = norm_url(a["href"])
-        if not url:
+        if not LINK_RE.match(a["href"]):
             continue
-        card = _card_of(a, url)
+        text = a.get_text(" ", strip=True)
+        m = DATE_RE.search(text)
+        if not m:
+            continue
+        url = urljoin(BASE, a["href"])
+        if url in seen:
+            continue
+        seen.add(url)
 
-        t = card.find("time")
-        date = find_date((t.get("datetime") or "") if t else "") or \
-            find_date(t.get_text(" ", strip=True) if t else "") or \
-            find_date(card.get_text(" ", strip=True))
+        title = text[: m.start()].strip()
+        words = title.split()
+        n = len(words)
+        if n and n % 2 == 0 and words[: n // 2] == words[n // 2:]:
+            title = " ".join(words[: n // 2])  # judul tampil ganda (alt gambar + teks)
 
-        title = ""
-        for h in card.find_all(["h1", "h2", "h3", "h4", "h5"]):
-            if h.get_text(strip=True):
-                title = h.get_text(" ", strip=True)
-                break
-        if not title:
-            title = a.get("title") or a.get_text(" ", strip=True)
-            for rx, _ in DATE_PATTERNS:
-                title = rx.sub("", title)
-        if not title.strip():
-            img = card.find("img")
-            title = (img.get("alt") if img else "") or ""
-        title = _dedupe_title(" ".join(title.split()))
-
-        cur = found.setdefault(url, {"judul": "", "tanggal": None, "url": url, "gambar": ""})
-        if len(title) > len(cur["judul"]):
-            cur["judul"] = title
-        cur["tanggal"] = cur["tanggal"] or date
-        cur["gambar"] = cur["gambar"] or _img_src(card)
-    return [v for v in found.values() if v["judul"]]
+        items.append({
+            "judul": title,
+            "tanggal": m.group(0),
+            "url": url,
+            "ym": (int(m.group(3)), BULAN[m.group(2).lower()]),
+        })
+    return items
 
 
 # ---------------------------------------------------------------------------
-# Browser
+# Pengambilan isi berita
 # ---------------------------------------------------------------------------
-def launch():
-    from playwright.sync_api import sync_playwright
-    pw = sync_playwright().start()
-    browser = pw.chromium.launch(headless=True)
-    ctx = browser.new_context(
-        locale="id-ID",
-        viewport={"width": 1366, "height": 900},
-        user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
-    )
-    return pw, browser, ctx
+def _is_boilerplate(text: str) -> bool:
+    low = text.lower()
+    return any(b in low for b in BOILERPLATE) and len(text) < 200
 
 
-def goto(page, url: str, wait_selector: str = None):
-    print(f"   GET {url}")
-    page.goto(url, wait_until="domcontentloaded", timeout=45000)
-    try:
-        page.wait_for_load_state("networkidle", timeout=20000)
-    except Exception:
-        pass
-    if wait_selector:
+def _is_noise_para(p) -> bool:
+    """Paragraf yang bukan isi berita: hashtag, footer Biro Humas, keterangan foto."""
+    t = p.get_text(" ", strip=True)
+    if t.startswith("#") or t.startswith("Biro Hubungan Masyarakat"):
+        return True
+    if "italic" in (p.get("class") or []):
+        return True
+    if p.find_parent(class_="social-auto-list"):
+        return True
+    # keterangan foto: seluruh isi paragraf dibungkus <em>/<i>
+    em_text = " ".join(e.get_text(" ", strip=True) for e in p.find_all(["em", "i"]))
+    return bool(em_text) and em_text.replace(" ", "") == t.replace(" ", "")
+
+
+def _html_to_paragraphs(fragment: str) -> list:
+    """Ubah potongan HTML menjadi daftar paragraf teks."""
+    frag = BeautifulSoup(fragment, "html.parser")
+    pr = _from_prose(frag)                      # struktur div.prose, kalau ada
+    if pr:
+        return pr
+    paras = []
+    blocks = frag.find_all(["p", "li", "blockquote", "h2", "h3", "h4"])
+    if blocks:
+        for b in blocks:
+            if b.name == "p" and _is_noise_para(b):
+                continue
+            t = b.get_text(" ", strip=True)
+            if len(t) > 20:
+                paras.append(t)
+    else:
+        t = frag.get_text("\n", strip=True)
+        paras = [x.strip() for x in t.split("\n") if len(x.strip()) > 20]
+    return paras
+
+
+def _dedupe(paras: list) -> list:
+    seen, out = set(), []
+    for p in paras:
+        key = " ".join(p.split())
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def _from_prose(soup) -> list:
+    """Cara 0: div.prose berisi <p> isi berita (struktur halaman ATR/BPN).
+    Dicari di seluruh dokumen, bukan hanya di <main>/<article>, karena Next.js
+    kadang menaruh isi di luar elemen itu. Div prose milik keterangan foto
+    (miring/italic) dan hashtag/footer dilewati."""
+    best = []
+    for div in soup.find_all("div"):
+        classes = div.get("class") or []
+        if "prose" not in classes or "italic" in classes:
+            continue
+        paras = []
+        for p in div.find_all("p"):
+            if _is_noise_para(p):
+                continue                                # hashtag, footer Humas, caption
+            t = p.get_text(" ", strip=True)
+            if len(t) < 20:
+                continue
+            paras.append(t)
+        paras = _dedupe(paras)
+        if sum(len(x) for x in paras) > sum(len(x) for x in best):
+            best = paras
+    return best
+
+
+def _from_dom(soup) -> list:
+    """Cara 1: kumpulkan blok teks dari halaman (setelah membuang menu/footer)."""
+    for t in soup(["script", "style", "noscript", "nav", "footer", "header",
+                   "aside", "form", "svg", "button", "figcaption"]):
+        t.decompose()
+
+    root = soup.body or soup   # seluruh halaman: isi bisa berada di luar <main>
+    block_children = ["p", "div", "ul", "ol", "li", "h1", "h2", "h3", "h4",
+                      "table", "section", "article"]
+    paras = []
+    for el in root.find_all(["p", "li", "blockquote", "div", "span"]):
+        if el.name in ("div", "span"):
+            if el.find(block_children):        # bukan elemen "daun"
+                continue
+            if el.name == "span" and el.find_parent(["p", "li", "blockquote"]):
+                continue
+            min_len = 60
+        else:
+            min_len = 30
+        text = el.get_text(" ", strip=True)
+        if len(text) < min_len or _is_boilerplate(text):
+            continue
+        # lewati kalau teks ini sudah termuat di <p>/<li> induknya
+        if el.name in ("div", "span") and el.find_parent(["p", "li", "blockquote"]):
+            continue
+        paras.append(text)
+    return _dedupe(paras)
+
+
+def _next_payload(soup) -> str:
+    """Gabungkan semua potongan self.__next_f.push([1, "..."]) milik Next.js."""
+    chunks = []
+    for s in soup.find_all("script"):
+        t = (s.string or s.get_text() or "").strip()
+        if "__next_f" not in t:
+            continue
+        m = re.search(r"self\.__next_f\.push\((\[.*\])\)\s*;?\s*$", t, re.S)
+        if not m:
+            continue
         try:
-            page.wait_for_selector(wait_selector, timeout=15000)
+            arr = json.loads(m.group(1))
         except Exception:
-            pass
-    page.wait_for_timeout(DELAY_MS)
+            continue
+        if len(arr) > 1 and isinstance(arr[1], str):
+            chunks.append(arr[1])
+    return "".join(chunks)
 
 
-def autoscroll(page):
-    """Scroll ke bawah sampai jumlah tautan berita tidak bertambah (infinite scroll)."""
-    last = -1
-    for _ in range(MAX_SCROLL):
-        n = page.locator('a[href*="/berita/"]').count()
-        if n == last:
-            break
-        last = n
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(900)
-
-
-NEXT_SELECTORS = [
-    'a[rel="next"]', 'button:has-text("Selanjutnya")', 'a:has-text("Selanjutnya")',
-    'button:has-text("Berikutnya")', 'a:has-text("Berikutnya")',
-    'button:has-text("Next")', 'a:has-text("Next")', '[aria-label*="next" i]',
-    'li.next a', 'a:has-text("›")', 'button:has-text("›")', 'a:has-text("»")',
-]
-
-
-def click_next(page) -> bool:
-    for sel in NEXT_SELECTORS:
+def _json_strings(blob: str):
+    """Hasilkan string-string JSON panjang dari sebuah blob teks."""
+    for m in re.finditer(r'"((?:[^"\\]|\\.){200,})"', blob):
         try:
-            loc = page.locator(sel).first
-            if not loc.count() or not loc.is_visible() or not loc.is_enabled():
-                continue
-            if (loc.get_attribute("aria-disabled") or "") == "true" or \
-                    "disabled" in (loc.get_attribute("class") or ""):
-                continue
-            loc.click()
+            yield json.loads('"' + m.group(1) + '"')
+        except Exception:
+            continue
+
+
+def _looks_like_article(s: str) -> bool:
+    if s.startswith(("http", "/", "$", "{", "[")) or "/_next/" in s:
+        return False
+    words = s.split()
+    if len(words) < 40:
+        return False
+    letters = sum(c.isalpha() or c.isspace() for c in s)
+    return letters / max(len(s), 1) > 0.85 or "<p" in s
+
+
+def _from_next(soup) -> list:
+    """Cara 2: isi berita yang tertanam di data JSON Next.js."""
+    blobs = [_next_payload(soup)]
+    nd = soup.find("script", id="__NEXT_DATA__")
+    if nd:
+        blobs.append(nd.string or nd.get_text() or "")
+
+    best = []
+    for blob in blobs:
+        if not blob:
+            continue
+        candidates = []
+        # a) HTML mentah lewat dangerouslySetInnerHTML
+        for m in re.finditer(r'"__html":("(?:[^"\\]|\\.)*")', blob):
             try:
-                page.wait_for_load_state("networkidle", timeout=15000)
+                candidates.append(json.loads(m.group(1)))
             except Exception:
                 pass
-            page.wait_for_timeout(DELAY_MS)
-            return True
+        # a2) deretan <p>...</p> mentah (RSC menyimpan teks panjang tanpa tanda kutip)
+        raw_ps = re.findall(r"<p[ >].*?</p>", blob, re.S)
+        if raw_ps:
+            candidates.append("".join(raw_ps))
+        # b) string panjang apa pun yang tampak seperti isi artikel
+        candidates += [s for s in _json_strings(blob) if _looks_like_article(s)]
+
+        for c in candidates:
+            paras = _html_to_paragraphs(c) if "<" in c else \
+                [p.strip() for p in re.split(r"\n+", c) if len(p.strip()) > 20]
+            paras = [p for p in _dedupe(paras) if not _is_boilerplate(p)]
+            if sum(len(p) for p in paras) > sum(len(p) for p in best):
+                best = paras
+    return best
+
+
+def _from_jsonld(soup) -> list:
+    """Cara 3: JSON-LD (articleBody)."""
+    for s in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(s.string or s.get_text() or "")
         except Exception:
             continue
-    return False
-
-
-def _sig(items):
-    return tuple(i["url"] for i in items)
-
-
-def iter_list_pages(page):
-    """Hasilkan daftar berita halaman demi halaman (?page=N, kalau tidak bisa: klik 'next')."""
-    goto(page, LIST_URL, 'a[href*="/berita/"]')
-    autoscroll(page)
-    items1 = parse_list(page.content())
-    yield items1
-    if not items1:
-        return
-
-    # Mode A: paginasi lewat URL ?page=N
-    prev = _sig(items1)
-    goto(page, f"{LIST_URL}?page=2", 'a[href*="/berita/"]')
-    autoscroll(page)
-    items2 = parse_list(page.content())
-    if items2 and _sig(items2) != prev:
-        print("   ↪ paginasi lewat ?page=N")
-        yield items2
-        prev = _sig(items2)
-        for n in range(3, MAX_PAGES + 1):
-            goto(page, f"{LIST_URL}?page={n}", 'a[href*="/berita/"]')
-            autoscroll(page)
-            items = parse_list(page.content())
-            if not items or _sig(items) == prev:
-                return
-            yield items
-            prev = _sig(items)
-        return
-
-    # Mode B: klik tombol "berikutnya"
-    print("   ↪ ?page=N tidak berubah, coba klik tombol berikutnya")
-    goto(page, LIST_URL, 'a[href*="/berita/"]')
-    prev = _sig(items1)
-    for _ in range(MAX_PAGES - 1):
-        if not click_next(page):
-            return
-        autoscroll(page)
-        items = parse_list(page.content())
-        if not items or _sig(items) == prev:
-            return
-        yield items
-        prev = _sig(items)
-
-
-def dump_debug(page, note: str):
-    """Simpan HTML + daftar tautan supaya mudah mendiagnosis kalau struktur situs berbeda."""
-    html = page.content()
-    with open(DEBUG_FILE, "w", encoding="utf-8") as f:
-        f.write(html)
-    soup = BeautifulSoup(html, "html.parser")
-    hrefs = sorted({a["href"] for a in soup.find_all("a", href=True)})
-    print(f"❌ {note}")
-    print(f"   HTML disimpan di {DEBUG_FILE} ({len(html)} karakter). Tautan yang ada di halaman:")
-    for h in hrefs[:60]:
-        print("    ", h)
-
-
-# ---------------------------------------------------------------------------
-# Detail berita
-# ---------------------------------------------------------------------------
-CONTENT_SELECTORS = ["article", "div.prose", '[class*="prose"]', '[class*="content"]',
-                     '[class*="detail"]', "main"]
-
-
-def _size(paras):
-    return sum(len(p) for p in paras)
+        stack = data if isinstance(data, list) else [data]
+        while stack:
+            d = stack.pop()
+            if isinstance(d, dict):
+                body = d.get("articleBody")
+                if isinstance(body, str) and len(body) > 100:
+                    return [p.strip() for p in re.split(r"\n+", body) if p.strip()]
+                stack.extend(v for v in d.values() if isinstance(v, (dict, list)))
+            elif isinstance(d, list):
+                stack.extend(d)
+    return []
 
 
 def parse_detail(html: str):
-    """Kembalikan (gambar, isi, tanggal) dari halaman detail yang sudah dirender."""
+    """Ambil gambar utama (og:image) dan isi berita dari halaman detail."""
     soup = BeautifulSoup(html, "html.parser")
 
-    # tanggal terbit
-    date = None
-    meta = soup.find("meta", attrs={"property": "article:published_time"})
-    if meta and meta.get("content"):
-        date = find_date(meta["content"])
-    if not date:
-        for t in soup.find_all("time"):
-            date = find_date(t.get("datetime") or "") or find_date(t.get_text(" ", strip=True))
-            if date:
-                break
-    if not date:
-        root = soup.find("article") or soup.find("main") or soup.body or soup
-        date = find_date(root.get_text(" ", strip=True)[:1500])
-
-    # gambar: gambar pertama di dalam artikel, lalu og:image
     gambar = ""
-    art = soup.find("article") or soup.find("main")
-    if art:
-        gambar = _img_src(art)
+    og = soup.find("meta", attrs={"property": "og:image"})
+    if og and og.get("content"):
+        gambar = urljoin(BASE, og["content"])
 
-    # isi: ambil <p> dari wadah isi yang paling mungkin
-    chosen = []
-    for sel in CONTENT_SELECTORS:
-        best = []
-        for el in soup.select(sel):
-            paras = [p.get_text(" ", strip=True) for p in el.find_all("p")]
-            paras = [t for t in paras
-                     if len(t) > 20 and not t.startswith("#") and not pusat._is_boilerplate(t)]
-            paras = pusat._dedupe(paras)
-            if _size(paras) > _size(best):
-                best = paras
-        if _size(best) >= MIN_GOOD:
-            chosen = best
+    desc = ""
+    for attrs in ({"property": "og:description"}, {"name": "description"}):
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content") and len(tag["content"].strip()) > 30:
+            desc = tag["content"].strip()
             break
 
-    # cadangan: pakai pengurai umum dari scrape.py
-    if _size(chosen) < MIN_GOOD:
-        g2, k2 = pusat.parse_detail(html)
-        if len(k2) > _size(chosen):
-            chosen = [k2]
-        gambar = gambar or g2
-    elif not gambar:
-        og = soup.find("meta", attrs={"property": "og:image"})
-        if og and og.get("content"):
-            gambar = urljoin(BASE + "/", og["content"])
+    # Ambil data tertanam DULU, karena _from_dom membuang tag <script>.
+    results = {}
+    results["prose"] = _from_prose(soup)
+    results["next"] = _from_next(soup)
+    results["jsonld"] = _from_jsonld(soup)
+    results["dom"] = _from_dom(soup)   # terakhir: fungsi ini menghapus tag dari soup
 
-    return gambar, "\n".join(chosen), date
+    def size(paras):
+        return sum(len(p) for p in paras)
+
+    # Urutan prioritas; pakai yang pertama cukup panjang.
+    chosen, name = [], ""
+    for key in ("prose", "next", "dom", "jsonld"):
+        if size(results[key]) >= MIN_GOOD:
+            chosen, name = results[key], key
+            break
+    if not chosen:  # tidak ada yang cukup panjang -> ambil yang terpanjang
+        name, chosen = max(results.items(), key=lambda kv: size(kv[1]))
+        if size(chosen) < 100:
+            chosen, name = ([desc] if desc else []), "meta-description"
+
+    print(f"   📝 isi diambil via '{name}': {size(chosen)} karakter "
+          f"(prose={size(results['prose'])}, next={size(results['next'])}, "
+          f"dom={size(results['dom'])}, jsonld={size(results['jsonld'])}, desc={len(desc)})")
+    return gambar, "\n".join(chosen)
 
 
-def fetch_detail(ctx, url: str):
-    page = ctx.new_page()
+
+# ---------------------------------------------------------------------------
+# Render dengan browser sungguhan (untuk isi yang dimuat lewat JavaScript)
+# ---------------------------------------------------------------------------
+_PW = {"pw": None, "browser": None, "ctx": None, "failed": False}
+
+
+def fetch_rendered(url: str, timeout_ms: int = 40000):
+    """Buka halaman di Chromium, tunggu teks berita muncul, kembalikan HTML-nya."""
+    if _PW["failed"]:
+        return None
     try:
-        goto(page, url, "article, div.prose, main p")
-        return parse_detail(page.content())
+        if _PW["browser"] is None:
+            from playwright.sync_api import sync_playwright
+            _PW["pw"] = sync_playwright().start()
+            _PW["browser"] = _PW["pw"].chromium.launch(headless=True)
+            _PW["ctx"] = _PW["browser"].new_context(
+                locale="id-ID",
+                viewport={"width": 1366, "height": 900},
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+            )
+        page = _PW["ctx"].new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            try:  # tunggu sampai ada paragraf isi (bukan sekadar caption foto)
+                page.wait_for_function(
+                    "() => [...document.querySelectorAll('div.prose p')]"
+                    ".some(p => p.innerText.trim().length > 80)",
+                    timeout=20000,
+                )
+            except Exception:
+                print("   ⚠️ Browser: paragraf isi tidak muncul dalam 20 detik")
+            page.wait_for_timeout(800)
+            return page.content()
+        finally:
+            page.close()
+    except ImportError:
+        print("   ⚠️ Playwright belum terpasang (pip install playwright && "
+              "python -m playwright install --with-deps chromium)")
+        _PW["failed"] = True
     except Exception as e:
-        print(f"   ⚠️ Gagal membuka detail: {e}")
-        return "", "", None
-    finally:
-        page.close()
+        print(f"   ⚠️ Render browser gagal: {e}")
+        if _PW["browser"] is None:
+            _PW["failed"] = True
+    return None
 
 
-# ---------------------------------------------------------------------------
-# Alur utama
-# ---------------------------------------------------------------------------
-def _csv_name(ym):
-    return f"{CSV_PREFIX}-{ym[0]}-{ym[1]:02d}.csv"
+def close_rendered():
+    try:
+        if _PW["browser"]:
+            _PW["browser"].close()
+        if _PW["pw"]:
+            _PW["pw"].stop()
+    except Exception:
+        pass
 
 
-def scrape_bintan():
+def load_existing(csv_filename: str) -> dict:
+    if not os.path.exists(csv_filename):
+        return {}
+    try:
+        df = pd.read_csv(csv_filename, dtype=str).fillna("")
+        return {r["url"]: r for r in df.to_dict("records") if r.get("url")}
+    except Exception as e:
+        print(f"⚠️ Gagal membaca {csv_filename} yang lama: {e}")
+        return {}
+
+
+def determine_targets():
+    wib_now = datetime.now(timezone.utc) + timedelta(hours=7)
+    # `or` (bukan default getenv) karena GitHub Actions mengirim string kosong
+    env_month = (os.getenv("TARGET_MONTH") or "").strip()
+    env_year = (os.getenv("TARGET_YEAR") or "").strip()
+
+    if env_month or env_year:
+        month = int(env_month) if env_month else wib_now.month
+        year = int(env_year) if env_year else wib_now.year
+        return [(year, month)]
+
+    cur = (wib_now.year, wib_now.month)
+    return [cur, shift_month(*cur, -1)]
+
+
+def scrape_atr_bpn_auto():
     targets = determine_targets()
     oldest = min(targets)
     print("📅 Periode yang diambil:", ", ".join(f"{m:02d}/{y}" for y, m in targets))
 
-    existing = {}
-    for ym in targets:
-        existing.update(load_existing(_csv_name(ym)))
+    scraper = cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "windows", "mobile": False}
+    )
+    scraper.headers.update({"Accept-Language": "id-ID,id;q=0.9,en;q=0.8"})
 
-    pw, browser, ctx = launch()
-    try:
-        page = ctx.new_page()
-        cache = {}      # url -> (gambar, isi, tanggal) hasil buka halaman detail
-        matched = []    # berita yang masuk periode target
-        seen = set()
-
-        try:
-            pages = iter_list_pages(page)
-            for n, items in enumerate(pages, 1):
-                print(f"🔍 Halaman {n}: {len(items)} berita ditemukan")
-                if n == 1 and not items:
-                    dump_debug(page, "Halaman daftar terbuka tapi tidak ada tautan berita "
-                                     "(pola URL/struktur situs berbeda). CSV lama tidak diubah.")
-                    sys.exit(1)
-
-                dates = []
-                for it in items:
-                    if it["url"] in seen:
-                        continue
-                    seen.add(it["url"])
-                    d = it["tanggal"]
-                    old = existing.get(it["url"])
-                    if not d and old:
-                        d = find_date(old.get("tanggal", ""))
-                    if not d:   # daftar tidak menampilkan tanggal -> baca dari halaman detail
-                        cache[it["url"]] = fetch_detail(ctx, it["url"])
-                        d = cache[it["url"]][2]
-                    it["tanggal"] = d
-                    dates.append(d)
-                    if d and (d[0], d[1]) in targets:
-                        matched.append(it)
-
-                known = [d for d in dates if d]
-                if known and all((d[0], d[1]) < oldest for d in known):
-                    break
-        except SystemExit:
-            raise
-        except Exception as e:
-            print(f"❌ Gagal menelusuri daftar berita: {e}")
-            try:
-                dump_debug(page, "Penelusuran daftar berhenti karena error.")
-            except Exception:
-                pass
+    # 1) Telusuri halaman daftar sampai melewati periode paling lama
+    matched = []
+    for page in range(1, MAX_PAGES + 1):
+        html = fetch(scraper, f"{LIST_URL}?page={page}")
+        if not html:
+            print("❌ Gagal memuat halaman daftar. CSV lama tidak diubah.")
             sys.exit(1)
+        items = parse_list(html)
+        print(f"🔍 Halaman {page}: {len(items)} berita ditemukan")
+        if not items:
+            if page == 1:
+                print("❌ Halaman daftar terbuka tapi tidak ada berita yang terbaca "
+                      "(struktur HTML berubah atau halaman diblokir). CSV lama tidak diubah.")
+                sys.exit(1)
+            break
+        matched += [it for it in items if it["ym"] in targets]
+        if all(it["ym"] < oldest for it in items):
+            break
+        time.sleep(DELAY)
 
-        for ym in targets:
-            rows = []
-            for it in [x for x in matched if (x["tanggal"][0], x["tanggal"][1]) == ym]:
-                old = existing.get(it["url"])
-                if old and len(old.get("content", "")) >= MIN_REUSE:
-                    rows.append({c: old.get(c, "") for c in COLUMNS})
-                    continue
-                if it["url"] not in cache:
-                    cache[it["url"]] = fetch_detail(ctx, it["url"])
-                gambar, konten, _ = cache[it["url"]]
-                if not konten:
-                    print(f"   ⚠️ Isi kosong untuk: {it['url']}")
-                rows.append({
-                    "judul": it["judul"],
-                    "tanggal": fmt_date(it["tanggal"]),
-                    "url": it["url"],
-                    "gambar": it["gambar"] or gambar,
-                    "content": clean_content_safety(konten),
-                })
+    # 2) Per periode: ambil detail berita, lalu simpan CSV
+    for ym in targets:
+        year, month = ym
+        csv_filename = f"berita-{year}-{month:02d}.csv"
+        existing = load_existing(csv_filename)
+        rows = []
 
-            name = _csv_name(ym)
-            pd.DataFrame(rows, columns=COLUMNS).to_csv(name, index=False, encoding="utf-8", quoting=1)
-            print(f"📊 {name}: {len(rows)} berita")
-    finally:
-        try:
-            browser.close()
-            pw.stop()
-        except Exception:
-            pass
+        for it in [x for x in matched if x["ym"] == ym]:
+            old = existing.get(it["url"])
+            if old and len(old.get("content", "")) >= MIN_REUSE:
+                rows.append({c: old.get(c, "") for c in COLUMNS})
+                continue
+            time.sleep(DELAY)
+            html = fetch(scraper, it["url"])
+            gambar, konten = parse_detail(html) if html else ("", "")
+            if len(konten) < MIN_GOOD:
+                print("   🌐 Isi kurang dari cara biasa -> coba render browser")
+                rhtml = fetch_rendered(it["url"])
+                if rhtml:
+                    g2, k2 = parse_detail(rhtml)
+                    if len(k2) > len(konten):
+                        konten, gambar = k2, (gambar or g2)
+            if not konten:
+                print(f"   ⚠️ Isi kosong untuk: {it['url']}")
+            rows.append({
+                "judul": it["judul"],
+                "tanggal": it["tanggal"],
+                "url": it["url"],
+                "gambar": gambar,
+                "content": clean_content_safety(konten),
+            })
+
+        pd.DataFrame(rows, columns=COLUMNS).to_csv(
+            csv_filename, index=False, encoding="utf-8", quoting=1
+        )
+        print(f"📊 {csv_filename}: {len(rows)} berita")
 
 
 if __name__ == "__main__":
-    scrape_bintan()
+    try:
+        scrape_atr_bpn_auto()
+    finally:
+        close_rendered()
