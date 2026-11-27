@@ -26,6 +26,14 @@
     <main id="homepage-view" class="container mx-auto py-10 px-4 flex-grow hidden">
         <div id="notice" class="hidden mb-6 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3"></div>
 
+        <div id="menu-bar" class="mb-8 space-y-4">
+            <div id="source-tabs" class="flex flex-wrap gap-2"></div>
+            <div class="flex items-center gap-3">
+                <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider shrink-0">📅 Bulan</span>
+                <div id="month-chips" class="flex gap-2 overflow-x-auto pb-2"></div>
+            </div>
+        </div>
+
         <div id="news-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"></div>
 
         <div class="flex flex-wrap justify-center items-center gap-2 mt-12 border-t border-slate-200 pt-8" id="pagination-container"></div>
@@ -78,7 +86,12 @@
     <script>
         // ---------- Pengaturan ----------
         const postsPerPage = 6;
-        const MAX_LOOKBACK = 6; // berapa bulan ke belakang dicoba jika bulan ini kosong
+        const MONTHS_SHOWN = 12; // berapa bulan ke belakang yang dicek untuk menu bulan
+        // prefix = awalan nama file CSV: <prefix><YYYY-MM>.csv
+        const SOURCES = {
+            pusat:  { label: '🏛️ Pusat (Kementerian ATR/BPN)', short: 'Pusat',  prefix: 'berita-',        siteName: 'Situs ATR/BPN Pusat' },
+            bintan: { label: '📍 Kantah Kab. Bintan',          short: 'Bintan', prefix: 'berita-bintan-', siteName: 'Situs Kantah Kab. Bintan' }
+        };
         const PLACEHOLDER = 'data:image/svg+xml;utf8,' + encodeURIComponent(
             '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400"><rect width="100%" height="100%" fill="#e2e8f0"/>' +
             '<text x="50%" y="50%" fill="#64748b" font-family="sans-serif" font-size="28" text-anchor="middle">Kementerian ATR/BPN</text></svg>'
@@ -87,9 +100,12 @@
         // ---------- State ----------
         let articlesData = [];
         let activeYM = null;
+        let availableMonths = [];
         const params = new URLSearchParams(window.location.search);
         const articleId = params.get('id');
         const requestedMonth = params.get('m');
+        const sourceKey = SOURCES[params.get('s')] ? params.get('s') : 'pusat';
+        const SRC = SOURCES[sourceKey];
         let currentPage = parseInt(params.get('page')) || 1;
 
         // ---------- Helper ----------
@@ -116,10 +132,11 @@
             return new Date(ym.y, ym.m - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
         }
         function pageLink(page, id) {
-            let q = `m=${ymKey(activeYM)}&page=${page}`;
+            let q = `s=${sourceKey}&m=${ymKey(activeYM)}&page=${page}`;
             if (id !== undefined) q += `&id=${id}`;
             return `index.html?${q}`;
         }
+        function csvName(ym) { return `${SRC.prefix}${ymKey(ym)}.csv`; }
         function imgFallback(img) {
             img.onerror = null;
             img.src = PLACEHOLDER;
@@ -140,44 +157,84 @@
         }
 
         // ---------- Inisialisasi ----------
+        async function fileExists(name) {
+            try {
+                const r = await fetch(name, { method: 'HEAD', cache: 'no-store' });
+                return r.ok;
+            } catch (e) { return false; }
+        }
+
         async function init() {
             const now = new Date();
             const thisMonth = { y: now.getFullYear(), m: now.getMonth() + 1 };
-            const start = parseYM(requestedMonth) || thisMonth;
+            const requested = parseYM(requestedMonth);
 
-            for (let i = 0; i <= MAX_LOOKBACK; i++) {
-                const ym = shiftYM(start, -i);
-                const rows = await loadCsv(`berita-${ymKey(ym)}.csv`);
-                if (rows && rows.length) {
-                    articlesData = rows;
-                    activeYM = ym;
-                    break;
-                }
+            // Cek bulan mana yang punya file CSV (untuk menu bulan)
+            const candidates = [];
+            for (let i = 0; i < MONTHS_SHOWN; i++) candidates.push(shiftYM(thisMonth, -i));
+            if (requested && !candidates.some(c => ymKey(c) === ymKey(requested))) candidates.push(requested);
+            const checks = await Promise.all(candidates.map(ym => fileExists(csvName(ym))));
+            availableMonths = candidates.filter((_, i) => checks[i]);
+            availableMonths.sort((a, b) => ymKey(b).localeCompare(ymKey(a)));
+
+            activeYM = requested || availableMonths[0] || thisMonth;
+            if (availableMonths.some(ym => ymKey(ym) === ymKey(activeYM))) {
+                articlesData = (await loadCsv(csvName(activeYM))) || [];
             }
 
             document.getElementById('loading-view').classList.add('hidden');
-            const badge = document.getElementById('periode-badge');
-
-            if (!activeYM) {
-                activeYM = start;
-                badge.textContent = `📅 Periode ${labelYM(start)}`;
-                document.getElementById('homepage-view').classList.remove('hidden');
-                document.getElementById('news-container').innerHTML =
-                    `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-500">
-                        ⚠️ Belum ada data berita dalam ${MAX_LOOKBACK + 1} bulan terakhir.<br>
-                        <span class="text-xs">Jalankan workflow <b>Auto Scrape Berita ATR/BPN</b> di tab Actions, lalu muat ulang halaman ini.</span>
-                    </div>`;
-                return;
-            }
-
-            badge.textContent = `📅 Periode ${labelYM(activeYM)}`;
+            document.getElementById('periode-badge').textContent = `📅 ${SRC.short} · ${labelYM(activeYM)}`;
+            renderMenu(thisMonth);
 
             const detailIndex = articleId !== null ? parseInt(articleId, 10) : NaN;
             if (!isNaN(detailIndex) && articlesData[detailIndex]) {
                 renderDetailView(detailIndex);
-            } else {
-                renderHomepageView(thisMonth);
+                return;
             }
+
+            if (!articlesData.length) {
+                document.getElementById('homepage-view').classList.remove('hidden');
+                document.getElementById('news-container').innerHTML =
+                    `<div class="col-span-full text-center py-20 bg-white rounded-2xl shadow p-8 text-slate-500">
+                        ⚠️ Belum ada berita ${esc(SRC.short)} untuk ${esc(labelYM(activeYM))}.<br>
+                        <span class="text-xs">Pilih bulan lain di menu atas, atau jalankan workflow <b>Auto Scrape Berita ATR/BPN</b> di tab Actions lalu muat ulang halaman ini.</span>
+                    </div>`;
+                return;
+            }
+            renderHomepageView(thisMonth);
+        }
+
+        // ---------- Menu sumber & bulan ----------
+        function renderMenu(thisMonth) {
+            document.getElementById('source-tabs').innerHTML = Object.entries(SOURCES).map(([key, s]) => {
+                const cls = key === sourceKey
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100';
+                return `<a href="index.html?s=${key}" class="px-4 py-2 rounded-xl text-xs md:text-sm font-semibold transition ${cls}">${esc(s.label)}</a>`;
+            }).join('');
+
+            // bulan di menu = bulan yang ada datanya + bulan berjalan + bulan aktif
+            const months = [...availableMonths];
+            [thisMonth, activeYM].forEach(ym => {
+                if (!months.some(x => ymKey(x) === ymKey(ym))) months.push(ym);
+            });
+            months.sort((a, b) => ymKey(b).localeCompare(ymKey(a)));
+
+            const box = document.getElementById('month-chips');
+            box.innerHTML = months.map(ym => {
+                const isActive = ymKey(ym) === ymKey(activeYM);
+                const hasData = availableMonths.some(x => ymKey(x) === ymKey(ym));
+                const cls = isActive
+                    ? 'bg-slate-800 text-white shadow-sm'
+                    : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100' + (hasData ? '' : ' opacity-50');
+                const label = new Date(ym.y, ym.m - 1, 1).toLocaleDateString('id-ID', { month: 'short', year: 'numeric' });
+                return `<a href="index.html?s=${sourceKey}&m=${ymKey(ym)}" ${isActive ? 'data-active="1"' : ''}
+                           title="${hasData ? labelYM(ym) : 'Belum ada data'}"
+                           class="whitespace-nowrap px-3.5 py-1.5 rounded-full text-xs font-semibold transition ${cls}">${esc(label)}</a>`;
+            }).join('');
+
+            const act = box.querySelector('[data-active]');
+            if (act) box.scrollLeft = Math.max(0, act.offsetLeft - box.offsetLeft - 16);
         }
 
         // ---------- Beranda ----------
@@ -230,7 +287,7 @@
                                 </h2>
                                 <p class="text-slate-500 text-xs md:text-sm leading-relaxed mb-3">${esc(cuplikan)}</p>
                                 <a href="${urlAsli}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center text-xs text-blue-400 font-medium hover:underline gap-1">
-                                    🔗 Buka Publikasi Asli Pusat ↗
+                                    🔗 Buka Publikasi Asli ↗
                                 </a>
                             </div>
                         </div>
@@ -275,7 +332,9 @@
             document.getElementById('detail-date').textContent = `📅 Diterbitkan pada: ${item.tanggal || labelYM(activeYM)}`;
             document.getElementById('detail-content').textContent =
                 (item.content || '').trim() || 'Isi berita tidak tersedia di sini. Silakan buka sumber asli di situs ATR/BPN.';
-            document.getElementById('detail-original-url').href = safeUrl(item.url) || '#';
+            const orig = document.getElementById('detail-original-url');
+            orig.href = safeUrl(item.url) || '#';
+            orig.textContent = `🌐 Lihat Sumber Asli di ${SRC.siteName} ↗`;
 
             const imgContainer = document.getElementById('detail-image-container');
             const detailImg = document.getElementById('detail-image');
