@@ -74,7 +74,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           # bersihkan file sisa dari versi lama yang salah nama
           git rm -f --ignore-unmatch "berita--.csv" || true
-          git add berita-????-??.csv berita-bintan-????-??.csv
+          # tambahkan hanya file yang ada (hindari error kalau salah satu belum terbentuk)
+          for f in berita-????-??.csv berita-bintan-????-??.csv; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
           if git diff --staged --quiet; then
             echo "Tidak ada perubahan pada file CSV."
           else
